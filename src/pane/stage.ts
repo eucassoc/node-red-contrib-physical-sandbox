@@ -59,6 +59,15 @@ export interface StageOptions {
   canOrbit?: () => boolean;
 }
 
+export interface FrameOptions { states?: { topic: string; payload: Json }[]; maxSide?: number }
+
+/** One frame drawn: its size and its encodings. */
+export interface FramePicture {
+  width: number;
+  height: number;
+  encode(type: 'image/png' | 'image/jpeg', quality?: number): Promise<Blob>;
+}
+
 export interface PaneStage {
   setScene(scene: PaneScene): Promise<void>;
   applyState(message: { topic: string; payload: Json }): boolean;
@@ -75,9 +84,12 @@ export interface PaneStage {
    * longest side is `maxSide`. With `states` (the latest of each device at a stream time) those
    * are drawn instead of what the stage shows: on the stage's own copy, put back right after the
    * drawing (in the same task, so nothing live comes in between and nothing else sees it). A video
-   * background is drawn as it shows now.
+   * background is drawn as it shows now. The 3D is drawn at the canvas's size and scaled to the
+   * picture's: a narrow pane gives a blurrier robot.
    */
-  frame(o?: { states?: { topic: string; payload: Json }[]; maxSide?: number }): Promise<Blob>;
+  frame(o?: FrameOptions): Promise<Blob>;
+  /** The same drawing, kept to be encoded (as PNG, as JPEG at a quality) as often as needed. */
+  picture(o?: FrameOptions): FramePicture;
   /** A point of the page as a pixel of the picture ({u, v} in its own pixels), or null off it. */
   pixelAt(clientX: number, clientY: number): { u: number; v: number } | null;
   /** A point of the page as a point on the floor, ROS [x, y] metres, or null when it misses it. */
@@ -474,7 +486,7 @@ export function createPaneStage(canvas: any, opts: StageOptions): PaneStage {
     }
   }
 
-  function frame(o: { states?: { topic: string; payload: Json }[]; maxSide?: number } = {}): Promise<Blob> {
+  function picture(o: FrameOptions = {}): FramePicture {
     const size = pictureSize() ?? { width: Math.round(rect.w), height: Math.round(rect.h) };
     const scale = isNumber(o.maxSide) && o.maxSide > 0 ? Math.min(1, o.maxSide / Math.max(size.width, size.height)) : 1;
     const width = Math.max(1, Math.round(size.width * scale));
@@ -501,10 +513,16 @@ export function createPaneStage(canvas: any, opts: StageOptions): PaneStage {
         showHeld();
       }
     }
-    return new Promise((resolve, reject) => {
-      out.toBlob((blob: Blob | null) => (blob ? resolve(blob) : reject(new Error('the frame could not be made'))), 'image/png');
-    });
+    return {
+      width,
+      height,
+      encode: (type, quality) => new Promise((resolve, reject) => {
+        out.toBlob((blob: Blob | null) => (blob ? resolve(blob) : reject(new Error('the frame could not be made'))), type, quality);
+      }),
+    };
   }
+
+  const frame = (o: FrameOptions = {}): Promise<Blob> => picture(o).encode('image/png');
 
   // ---- the orbit camera: dragged to turn, wheeled to zoom ----
 
@@ -544,6 +562,7 @@ export function createPaneStage(canvas: any, opts: StageOptions): PaneStage {
     fit,
     layout,
     frame,
+    picture,
     pixelAt,
     floorPointAt,
     missing: () => missingList.map((m) => ({ ...m })),

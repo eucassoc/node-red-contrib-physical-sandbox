@@ -2,6 +2,8 @@
  * Small PNG files for the tests, made here (no picture of anything real): `pngOf(width, height)`
  * is one colour; with `noise` every byte is random and stored without compression, so the file
  * is about as large as its pixels (3 bytes each). `pngSize` reads a PNG's width and height.
+ * `jpegOf(width, height, bytes)` is the frame of a JPEG (SOI, a comment of `bytes` padding, SOF0
+ * with the size, EOI) for what reads a JPEG's signature and size; it holds no image data.
  */
 import { randomBytes } from 'node:crypto';
 import { crc32, deflateSync } from 'node:zlib';
@@ -39,4 +41,18 @@ export function pngOf(width: number, height: number, o: { noise?: boolean; rgb?:
 export function pngSize(data: Buffer | string): { width: number; height: number } {
   const bytes = typeof data === 'string' ? Buffer.from(data, 'base64') : data;
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+}
+
+export function jpegOf(width: number, height: number, padding = 0): Buffer {
+  const segment = (marker: number, data: Buffer) => {
+    const head = Buffer.from([0xff, marker, 0, 0]);
+    head.writeUInt16BE(data.length + 2, 2);
+    return Buffer.concat([head, data]);
+  };
+  const comments: Buffer[] = [];
+  for (let left = padding; left > 0; left -= 65000) comments.push(segment(0xfe, Buffer.alloc(Math.min(left, 65000), 0x20)));
+  const sof = Buffer.from([8, 0, 0, 0, 0, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+  sof.writeUInt16BE(height, 1);
+  sof.writeUInt16BE(width, 3);
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), ...comments, segment(0xc0, sof), Buffer.from([0xff, 0xd9])]);
 }

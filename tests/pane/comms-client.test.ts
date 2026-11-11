@@ -1,7 +1,8 @@
 // How the pane hears the hub and talks to it (src/pane/comms-client.ts).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { adminRootOf, answerEditorRequest, commsUrlOf, connectComms, createApi, dispatch, FRAME_MAX_SIDE, FRAMES_MAX, listenToEditor, PaneError, PANE_FRAMES_BAD, PANE_FRAMES_FAILED, PANE_FRAMES_OFF, tokenOf, type PaneHandlers } from '../../src/pane/comms-client.js';
+import { adminRootOf, commsUrlOf, connectComms, createApi, createPaneAnswers, dispatch, listenToEditor, PaneError, PANE_FRAMES_BAD, PANE_FRAMES_FAILED, PANE_FRAMES_OFF, PANE_FRAMES_TOO_LARGE, tokenOf, type PaneHandlers } from '../../src/pane/comms-client.js';
+import { FRAME_MAX_BYTES, FRAME_MAX_SIDE, FRAMES_MAX, FRAMES_TOTAL_BYTES, frameBudget } from '../../src/core/frames.js';
 
 function recorder() {
   const heard: [string, any][] = [];
@@ -26,9 +27,14 @@ test('each ps-pane topic goes to its handler; anything else is let go', () => {
   assert.deepEqual(heard.map(([k]) => k), ['scene', 'state', 'snapshot', 'status']);
 });
 
-test('a request on the editor link goes to the request handler (when there is one); a cancel or a request of no shape is let go', () => {
+test('a request on the editor link goes to the request handler, a cancel to the cancel handler (when there is one); one of no shape is let go', () => {
   const { heard, handlers } = recorder();
   const requests: any[] = [];
+  const cancels: string[] = [];
+  dispatch('ps-editor/cancel', { id: 'c' }, { ...handlers, cancel: (id) => cancels.push(id) });
+  dispatch('ps-editor/cancel', { id: 3 }, { ...handlers, cancel: (id) => cancels.push(String(id)) });
+  dispatch('ps-editor/cancel', { id: 'c' }, handlers);
+  assert.deepEqual(cancels, ['c']);
   dispatch('ps-editor/request', { id: 'r', op: 'ping', args: {} }, handlers);
   dispatch('ps-editor/request', { id: 'r', op: 'ping', args: {} }, { ...handlers, request: (r) => requests.push(r) });
   dispatch('ps-editor/request', { op: 'ping' }, { ...handlers, request: (r) => requests.push(r) });
@@ -38,49 +44,73 @@ test('a request on the editor link goes to the request handler (when there is on
   assert.deepEqual(heard, []);
 });
 
-/** A stage for the pane's answer: its switch as `allowed` says, each frame a blob of the bytes given. */
-function frameSource(o: { allowed?: () => boolean; bytes?: Uint8Array; fail?: boolean } = {}) {
+/**
+ * A stage for the pane's answer: its switch as `allowed` says; each frame is 640x360 and encodes
+ * to `png` bytes as PNG and `jpeg` bytes as JPEG (any quality), noting each encoding asked for.
+ */
+function frameSource(o: { allowed?: () => boolean; png?: number; jpeg?: number[]; fail?: boolean } = {}) {
   const drawn: any[] = [];
+  const encodings: [string, number | undefined][] = [];
   return {
     drawn,
+    encodings,
     allowed: o.allowed ?? (() => true),
-    async frame(f: any) {
+    picture(f: any) {
       drawn.push(f);
       if (o.fail) throw new Error('no WebGL');
-      return new Blob([new Uint8Array(o.bytes ?? [1, 2, 3])], { type: 'image/png' });
+      return {
+        width: 640,
+        height: 360,
+        async encode(type: 'image/png' | 'image/jpeg', quality?: number) {
+          encodings.push([type, quality]);
+          const size = type === 'image/png' ? (o.png ?? 3) : (o.jpeg ?? [2, 2])[quality === 0.85 ? 0 : 1];
+          return new Blob([new Uint8Array(size).fill(type === 'image/png' ? 1 : 2)], { type });
+        },
+      };
     },
   };
 }
 
-function answering() {
+function answering(o: { failFirst?: boolean } = {}) {
   const calls: [string, any, any][] = [];
-  const api = createApi({ base: '/', token: () => 'T', fetchImpl: async (url: string, init: any) => { calls.push([url, JSON.parse(init.body), init.headers]); return { ok: true, json: async () => ({ taken: true }) }; } });
+  let failed = false;
+  const api = createApi({
+    base: '/',
+    token: () => 'T',
+    fetchImpl: async (url: string, init: any) => {
+      calls.push([url, JSON.parse(init.body), init.headers]);
+      if (o.failFirst && !failed) { failed = true; return { ok: false, status: 413, json: async () => ({}) }; }
+      return { ok: true, json: async () => ({ taken: true }) };
+    },
+  });
   return { calls, api };
 }
 
+const b64 = (n: number, byte: number) => Buffer.alloc(n, byte).toString('base64');
+
 test('a pane answers ping (as a pane, with its page) and leaves the editor\'s requests alone', async () => {
   const { calls, api } = answering();
-  const source = frameSource();
-  await answerEditorRequest(api, { id: 'p', op: 'ping', args: {} }, 'page-1', source);
-  assert.equal(answerEditorRequest(api, { id: 'x', op: 'flows', args: {} }, 'page-1', source), null);
-  assert.equal(answerEditorRequest(api, { id: 'y', op: 'propose', args: {} }, 'page-1', source), null);
+  const answers = createPaneAnswers(api, 'page-1', frameSource());
+  await answers.request({ id: 'p', op: 'ping', args: {} });
+  assert.equal(answers.request({ id: 'x', op: 'flows', args: {} }), null);
+  assert.equal(answers.request({ id: 'y', op: 'propose', args: {} }), null);
   assert.deepEqual(calls.map(([url, body]) => [url, body]), [
     ['/physical-sandbox/editor/answer', { id: 'p', ok: true, result: { kind: 'pane', page: 'page-1' } }],
   ]);
   // a refused answer (no permission, the request is over) is let go
   const refusing = createApi({ base: '/', token: () => null, fetchImpl: async () => ({ ok: false, status: 401, json: async () => ({}) }) });
-  await answerEditorRequest(refusing, { id: 'p', op: 'ping', args: {} }, 'page-1', source);
+  await createPaneAnswers(refusing, 'page-1', frameSource()).request({ id: 'p', op: 'ping', args: {} });
 });
 
-test('a pane answers frames with each frame drawn on its own copy (the states given, longest side 1280) as base64 PNG, posted as text', async () => {
+test('a pane answers frames with each frame drawn on its own copy (the states given, longest side 1280) as base64 PNG with its size, posted as text', async () => {
   const { calls, api } = answering();
-  const source = frameSource({ bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 255]) });
+  const source = frameSource();
   const states = [{ topic: 'ps/yard/arm/state', payload: { at: 1, joints: { j1: 0.2 } }, at: 1 }];
-  await answerEditorRequest(api, { id: 'f', op: 'frames', args: { frames: [{ t: 0, states }, {}] } }, 'page-1', source);
+  await createPaneAnswers(api, 'page-1', source).request({ id: 'f', op: 'frames', args: { frames: [{ t: 0, states }, {}] } });
   assert.deepEqual(source.drawn, [{ states, maxSide: FRAME_MAX_SIDE }, { maxSide: FRAME_MAX_SIDE }]);
-  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 255]).toString('base64');
+  const png = { data: b64(3, 1), type: 'image/png', width: 640, height: 360 };
   assert.deepEqual(calls.map(([url, body]) => [url, body]), [
-    ['/physical-sandbox/editor/answer', { id: 'f', ok: true, result: { frames: [{ png }, { png }] } }],
+    ['/physical-sandbox/editor/answer', { id: 'f', ok: true, result: { frames: [png, png] } }],
   ]);
   // as text with the pane's header: Node-RED's JSON parser stops at 5 MB, the route reads text up to 20 MB
   assert.equal(calls[0][2]['X-PS-Pane'], '1');
@@ -88,22 +118,68 @@ test('a pane answers frames with each frame drawn on its own copy (the states gi
   assert.equal(calls[0][2].Authorization, 'Bearer T');
 });
 
+test('a frame over its share of the bytes goes as JPEG 0.85, then 0.6; still over, the pane says it was too large', async () => {
+  const budget = frameBudget(2);
+  assert.equal(frameBudget(1), FRAME_MAX_BYTES);
+  assert.equal(budget, FRAME_MAX_BYTES, 'two frames: each at most 3.75 MB');
+  assert.equal(frameBudget(4), Math.floor(FRAMES_TOTAL_BYTES / 4));
+  assert.equal(frameBudget(6), Math.floor(FRAMES_TOTAL_BYTES / 6));
+  const { calls, api } = answering();
+  const two = { frames: [{}, {}] };
+  const at85 = frameSource({ png: budget + 1, jpeg: [budget, 1] });
+  await createPaneAnswers(api, 'page-1', at85).request({ id: 'a', op: 'frames', args: two });
+  assert.deepEqual(at85.encodings.slice(0, 2), [['image/png', undefined], ['image/jpeg', 0.85]]);
+  const at60 = frameSource({ png: budget + 1, jpeg: [budget + 1, 5] });
+  await createPaneAnswers(api, 'page-1', at60).request({ id: 'b', op: 'frames', args: { frames: [{}] } });
+  const never = frameSource({ png: FRAME_MAX_BYTES + 1, jpeg: [FRAME_MAX_BYTES + 1, FRAME_MAX_BYTES + 1] });
+  await createPaneAnswers(api, 'page-1', never).request({ id: 'c', op: 'frames', args: { frames: [{}] } });
+  assert.deepEqual(never.encodings, [['image/png', undefined], ['image/jpeg', 0.85], ['image/jpeg', 0.6]]);
+  const bodies = calls.map(([, body]) => body);
+  assert.deepEqual(bodies[0].result.frames.map((f: any) => [f.type, Buffer.from(f.data, 'base64').length]), [['image/jpeg', budget], ['image/jpeg', budget]]);
+  assert.deepEqual(bodies[1].result.frames.map((f: any) => [f.type, Buffer.from(f.data, 'base64').length]), [['image/jpeg', 5]]);
+  assert.deepEqual(bodies[2], { id: 'c', ok: false, error: PANE_FRAMES_TOO_LARGE });
+});
+
+test('when the frames cannot be posted (refused, too large for the route), the pane says so instead of staying silent', async () => {
+  const { calls, api } = answering({ failFirst: true });
+  await createPaneAnswers(api, 'page-1', frameSource()).request({ id: 'f', op: 'frames', args: { frames: [{}] } });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0][1].ok, true);
+  assert.deepEqual(calls[1][1], { id: 'f', ok: false, error: PANE_FRAMES_TOO_LARGE });
+});
+
+test('a cancelled frames request stops drawing between frames and posts nothing', async () => {
+  const { calls, api } = answering();
+  let answers!: ReturnType<typeof createPaneAnswers>;
+  const source = frameSource();
+  const drawing = { ...source, picture(f: any) { const p = source.picture(f); answers.cancel('f'); return p; } };
+  answers = createPaneAnswers(api, 'page-1', drawing);
+  await answers.request({ id: 'f', op: 'frames', args: { frames: [{}, {}, {}] } });
+  assert.equal(source.drawn.length, 1);
+  assert.equal(calls.length, 0);
+  // cancelled before it came: nothing drawn
+  answers.cancel('g');
+  await answers.request({ id: 'g', op: 'frames', args: { frames: [{}] } });
+  assert.equal(source.drawn.length, 1);
+  assert.equal(calls.length, 0);
+});
+
 test('a pane whose switch shows off refuses frames and draws nothing; so does one asked for none or too many, or that cannot draw', async () => {
   const { calls, api } = answering();
   const off = frameSource({ allowed: () => false });
-  await answerEditorRequest(api, { id: 'a', op: 'frames', args: { frames: [{}] } }, 'page-1', off);
+  await createPaneAnswers(api, 'page-1', off).request({ id: 'a', op: 'frames', args: { frames: [{}] } });
   assert.equal(off.drawn.length, 0);
   const on = frameSource();
-  await answerEditorRequest(api, { id: 'b', op: 'frames', args: { frames: Array.from({ length: FRAMES_MAX + 1 }, () => ({})) } }, 'page-1', on);
-  await answerEditorRequest(api, { id: 'c', op: 'frames', args: { frames: [] } }, 'page-1', on);
-  await answerEditorRequest(api, { id: 'd', op: 'frames', args: {} }, 'page-1', on);
+  const answers = createPaneAnswers(api, 'page-1', on);
+  await answers.request({ id: 'b', op: 'frames', args: { frames: Array.from({ length: FRAMES_MAX + 1 }, () => ({})) } });
+  await answers.request({ id: 'c', op: 'frames', args: { frames: [] } });
+  await answers.request({ id: 'd', op: 'frames', args: {} });
   assert.equal(on.drawn.length, 0);
-  const broken = frameSource({ fail: true });
-  await answerEditorRequest(api, { id: 'e', op: 'frames', args: { frames: [{}] } }, 'page-1', broken);
+  await createPaneAnswers(api, 'page-1', frameSource({ fail: true })).request({ id: 'e', op: 'frames', args: { frames: [{}] } });
   // switched off between two frames: the rest is not drawn
   let left = 2;
   const turnedOff = frameSource({ allowed: () => (left -= 1) >= 0 });
-  await answerEditorRequest(api, { id: 'g', op: 'frames', args: { frames: [{}, {}, {}] } }, 'page-1', turnedOff);
+  await createPaneAnswers(api, 'page-1', turnedOff).request({ id: 'g', op: 'frames', args: { frames: [{}, {}, {}] } });
   assert.equal(turnedOff.drawn.length, 1);
   assert.deepEqual(calls.map(([, body]) => body), [
     { id: 'a', ok: false, error: PANE_FRAMES_OFF },

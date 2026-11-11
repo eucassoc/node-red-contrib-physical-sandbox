@@ -111,8 +111,39 @@ test('only a proposal can be claimed: a claim for flows (or frames) is not grant
     assert.deepEqual(await asked, []);
     const frames = s.link.ask('frames', {});
     assert.deepEqual((await s.answer({ id: s.requests()[1].data.id, claim: true })).json, { granted: false });
-    s.clock.advance(5000);
+    s.clock.advance(10_000); // frames wait 10 s
     await assert.rejects(frames, NoEditor);
+  } finally { await s.close(); }
+});
+
+test('frames: a refusal does not end the request; the first answer with frames wins; with refusals only, the last refusal when the time is up (10 s)', async () => {
+  const s = await setup();
+  try {
+    const won = s.link.ask('frames', { frames: [{}] });
+    const first = s.requests()[0].data.id;
+    assert.deepEqual((await s.answer({ id: first, ok: false, error: 'switch off here' })).json, { taken: true });
+    assert.deepEqual(s.cancels(), [], 'no cancel on a refusal');
+    assert.deepEqual((await s.answer({ id: first, ok: true, result: { frames: ['x'] } })).json, { taken: true });
+    assert.deepEqual(await won, { frames: ['x'] });
+    assert.equal(s.cancels().length, 1, 'the others are told to stop');
+    assert.deepEqual((await s.answer({ id: first, ok: true, result: { frames: ['y'] } })).json, { taken: false });
+
+    let settled = false;
+    const refused = s.link.ask('frames', { frames: [{}] });
+    void refused.catch(() => undefined).finally(() => { settled = true; });
+    const second = s.requests()[1].data.id;
+    await s.answer({ id: second, ok: false, error: 'first refusal' });
+    await s.answer({ id: second, ok: false, error: 'last refusal' });
+    s.clock.advance(9_999);
+    await Promise.resolve();
+    assert.equal(settled, false, 'still waiting for frames');
+    s.clock.advance(1);
+    await assert.rejects(refused, (e: Error) => e instanceof EditorRefused && e.message === 'last refusal');
+    // flows keep first-answer-wins: a refusal ends it at once
+    const flows = s.link.ask('flows', {});
+    const flowsRefused = assert.rejects(flows, (e: Error) => e instanceof EditorRefused && e.message === 'no');
+    await s.answer({ id: s.requests()[2].data.id, ok: false, error: 'no' });
+    await flowsRefused;
   } finally { await s.close(); }
 });
 

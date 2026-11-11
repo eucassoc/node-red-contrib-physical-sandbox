@@ -313,6 +313,20 @@ test('frame() with maxSide makes the picture smaller so its longest side fits, k
   assert.deepEqual([made.width, made.height], [800, 600]);
 });
 
+test('picture() draws once and encodes as often as asked (PNG, JPEG at a quality), with its size', async () => {
+  const asked: any[] = [];
+  const made: any = { getContext: () => ({ drawImage() {} }), toBlob: (done: (b: Blob) => void, type: string, quality?: number) => { asked.push([type, quality]); done(new Blob(['x'], { type })); } };
+  const { stage, renderer } = makeStage({ makeCanvas: () => made });
+  stage.setBackground({ style: {} }, { width: 1920, height: 1080 });
+  const before = renderer.calls.render;
+  const picture = stage.picture({ maxSide: 1280 });
+  assert.deepEqual([picture.width, picture.height], [1280, 720]);
+  assert.equal((await picture.encode('image/png')).type, 'image/png');
+  assert.equal((await picture.encode('image/jpeg', 0.6)).type, 'image/jpeg');
+  assert.deepEqual(asked, [['image/png', undefined], ['image/jpeg', 0.6]]);
+  assert.equal(renderer.calls.render, before + 1, 'drawn once');
+});
+
 test('frame() with states draws them on the stage\'s own copy, then puts back what it showed (the live states, an item\'s parent)', async () => {
   const made: any = { getContext: () => ({ drawImage() {} }), toBlob: (done: (b: Blob) => void, type: string) => done(new Blob(['png'], { type })) };
   const seen: any[] = [];

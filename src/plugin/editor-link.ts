@@ -13,8 +13,11 @@
  * `ps-editor/cancel {id}`, also when the time runs out. A proposal changes the workspace, so it must
  * land in one editor only: an editor first claims it (`{id, claim: true}`), only the first claim is
  * granted (with a ticket), the cancel goes out at that moment, and only the answer carrying the
- * ticket is taken; only a proposal can be claimed. A granted proposal that is never answered is
- * not "no editor" (the editor may well have imported it): it rejects with ProposalUnanswered, which
+ * ticket is taken; only a proposal can be claimed. For `frames` the first answer that gives the
+ * frames wins: a pane that refuses (its switch shows off, the frames were too large) does not stop
+ * another from answering, and its words are used only when no frames came in time (the last
+ * refusal); pictures take longer, so `frames` waits `framesTimeoutMs` (10 s). A granted proposal
+ * that is never answered is not "no editor" (the editor may well have imported it): it rejects with ProposalUnanswered, which
  * tells the agent to look at the editor before proposing again. A `ping` collects every answer for
  * a short time instead.
  *
@@ -81,16 +84,24 @@ interface Pending {
   answers?: unknown[];
   /** The ticket of the granted claim. */
   ticket?: string;
+  /** The last refusal heard, for an op whose refusals wait for a better answer (`frames`). */
+  refusal?: string;
 }
+
+/** The ops whose refusal does not end the request: another may still answer it. */
+const PATIENT: ReadonlySet<string> = new Set(['frames']);
 
 export function createEditorLink(RED: any, opts: {
   timeoutMs?: number;
+  /** How long `frames` waits (10 s). */
+  framesTimeoutMs?: number;
   pingMs?: number;
   presenceMs?: number;
   clock?: Clock;
 } = {}): EditorLink {
   const clock = opts.clock ?? realClock;
   const timeoutMs = opts.timeoutMs ?? 5000;
+  const framesTimeoutMs = opts.framesTimeoutMs ?? 10_000;
   const pingMs = opts.pingMs ?? 1000;
   const presenceMs = opts.presenceMs ?? 10_000;
   const pending = new Map<string, Pending>();
@@ -111,7 +122,7 @@ export function createEditorLink(RED: any, opts: {
       // a granted claim was already followed by the cancel
       if (p.ticket) { p.reject(new ProposalUnanswered()); return; }
       cancel(id);
-      p.reject(new NoEditor());
+      p.reject(p.refusal !== undefined ? new EditorRefused(p.refusal) : new NoEditor());
     }, p.timeoutMs);
   }
 
@@ -147,11 +158,19 @@ export function createEditorLink(RED: any, opts: {
       return { taken: true };
     }
     if (CLAIMED.has(p.op) && (!p.ticket || body.ticket !== p.ticket)) return { taken: false };
+    if (PATIENT.has(p.op) && body.ok !== true) {
+      p.refusal = refusalOf(body);
+      return { taken: true };
+    }
     finish(id, p);
     if (!p.ticket) cancel(id);
     if (body.ok === true) p.resolve(body.result);
-    else p.reject(new EditorRefused(typeof body.error === 'string' && body.error ? body.error.slice(0, 1000) : 'refused'));
+    else p.reject(new EditorRefused(refusalOf(body)));
     return { taken: true };
+  }
+
+  function refusalOf(body: Record<string, any>): string {
+    return typeof body.error === 'string' && body.error ? body.error.slice(0, 1000) : 'refused';
   }
 
   let counted: { at: number; value: Presence } | null = null;
@@ -176,7 +195,7 @@ export function createEditorLink(RED: any, opts: {
   }
 
   const link: EditorLink = {
-    ask: (op, args, o = {}) => request(op, args, o.timeoutMs ?? timeoutMs, false),
+    ask: (op, args, o = {}) => request(op, args, o.timeoutMs ?? (op === 'frames' ? framesTimeoutMs : timeoutMs), false),
     presence() {
       if (counted && clock.now() - counted.at < presenceMs) return Promise.resolve(counted.value);
       if (!counting) counting = ping().finally(() => { counting = null; });

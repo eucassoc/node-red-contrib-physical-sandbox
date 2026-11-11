@@ -13,6 +13,8 @@
  * the editor's token when it has one, always as `Authorization: Bearer`, never in an address.
  */
 
+import { FRAME_ENCODINGS, FRAME_MAX_SIDE, FRAMES_MAX, frameBudget } from '../core/frames.js';
+
 type Json = Record<string, any>;
 
 export const PANE_TOPIC = 'ps-pane/#';
@@ -29,6 +31,8 @@ export interface PaneHandlers {
   status(status: Json): void;
   /** A request of the plugin on the editor link (src/plugin/editor-link.ts). */
   request?(request: EditorRequest): void;
+  /** The plugin no longer needs the answer to this request (another answered, or the time ran out). */
+  cancel?(id: string): void;
 }
 
 export interface EditorRequest { id: string; op: string; args?: unknown }
@@ -42,6 +46,8 @@ export function dispatch(topic: unknown, data: unknown, handlers: PaneHandlers):
   else if (topic === 'ps-pane/status' && !Array.isArray(data)) handlers.status(data as Json);
   else if (topic === 'ps-editor/request' && !Array.isArray(data) && typeof (data as Json).id === 'string' && typeof (data as Json).op === 'string') {
     handlers.request?.(data as EditorRequest);
+  } else if (topic === 'ps-editor/cancel' && !Array.isArray(data) && typeof (data as Json).id === 'string') {
+    handlers.cancel?.((data as Json).id);
   }
 }
 
@@ -191,23 +197,30 @@ export function createApi(opts: { base: string; token: () => string | null; fetc
   };
 }
 
-/** At most this many frames per request, each at most this many pixels on its longest side. */
-export const FRAMES_MAX = 6;
-export const FRAME_MAX_SIDE = 1280;
-
 // What a pane says when it does not give its picture (the agent passes it on to the person)
 export const PANE_FRAMES_OFF = 'この右ペインでは「エージェントに映像を渡す」が入っていません / This pane does not share frames with the agent (its switch is off)';
 export const PANE_FRAMES_BAD = `右ペインに求める映像は 1 枚から ${FRAMES_MAX} 枚までです / A pane draws 1 to ${FRAMES_MAX} frames per request`;
 export const PANE_FRAMES_FAILED = 'この右ペインでは映像を作れませんでした / This pane could not draw the frame';
+export const PANE_FRAMES_TOO_LARGE = '映像が大きすぎて渡せませんでした / The frames were too large to hand over';
+
+/** One frame as the stage drew it: its size and its encodings (src/pane/stage.ts picture). */
+export interface DrawnFrame {
+  width: number;
+  height: number;
+  encode(type: 'image/png' | 'image/jpeg', quality?: number): Promise<Blob>;
+}
 
 /**
  * What draws the pane's frames: whether its switch 「エージェントに映像を渡す」 shows on now, and the
- * stage's `frame()` (with the states of a stream time drawn on its own copy, or as it is).
+ * stage's `picture()` (with the states of a stream time drawn on its own copy, or as it is).
  */
 export interface FrameSource {
   allowed(): boolean;
-  frame(o: { states?: Json[]; maxSide: number }): Promise<Blob>;
+  picture(o: { states?: Json[]; maxSide: number }): DrawnFrame;
 }
+
+/** One frame as it is handed over. */
+export interface FrameAnswer { data: string; type: 'image/png' | 'image/jpeg'; width: number; height: number }
 
 /** A blob's bytes as base64. */
 async function base64Of(blob: Blob): Promise<string> {
@@ -217,38 +230,78 @@ async function base64Of(blob: Blob): Promise<string> {
   return btoa(text);
 }
 
+/** A drawn frame in the first encoding that fits the budget (PNG, then JPEG 0.85, then 0.6), or null. */
+async function encodeWithin(frame: DrawnFrame, budget: number): Promise<FrameAnswer | null> {
+  for (const { type, quality } of FRAME_ENCODINGS) {
+    const blob = await frame.encode(type, quality);
+    if (blob.size <= budget) return { data: await base64Of(blob), type, width: frame.width, height: frame.height };
+  }
+  return null;
+}
+
+type Outcome = { ok: true; result: Json } | { ok: false; error: string } | null;
+
 /**
  * The frames asked for (`args.frames: [{t?, states?}]`, the hub's states at each stream time; no
- * states: the stage as it is), drawn one after another while the switch shows on: `{frames: [{png}]}`
- * or the words of a refusal. The switch is looked at before each frame: one turned off meanwhile
- * stops it.
+ * states: the stage as it is), drawn one after another while the switch shows on, each encoded
+ * within its share of the bytes: `{frames: [{data, type, width, height}]}`, the words of a refusal,
+ * or null when the request was cancelled meanwhile (nothing is posted then). The switch and the
+ * cancel are looked at before each frame.
  */
-async function framesAnswer(args: unknown, source: FrameSource): Promise<{ ok: true; result: Json } | { ok: false; error: string }> {
+async function framesAnswer(args: unknown, source: FrameSource, cancelled: () => boolean): Promise<Outcome> {
   if (!source.allowed()) return { ok: false, error: PANE_FRAMES_OFF };
   const asked = (args as Json | null)?.frames;
   if (!Array.isArray(asked) || asked.length < 1 || asked.length > FRAMES_MAX) return { ok: false, error: PANE_FRAMES_BAD };
-  const frames: { png: string }[] = [];
+  const budget = frameBudget(asked.length);
+  const frames: FrameAnswer[] = [];
   for (const one of asked) {
+    if (cancelled()) return null;
     if (!source.allowed()) return { ok: false, error: PANE_FRAMES_OFF };
     const states = Array.isArray(one?.states) ? one.states : undefined;
+    let encoded: FrameAnswer | null;
     try {
-      frames.push({ png: await base64Of(await source.frame({ ...(states ? { states } : {}), maxSide: FRAME_MAX_SIDE })) });
+      encoded = await encodeWithin(source.picture({ ...(states ? { states } : {}), maxSide: FRAME_MAX_SIDE }), budget);
     } catch {
       return { ok: false, error: PANE_FRAMES_FAILED };
     }
+    if (!encoded) return { ok: false, error: PANE_FRAMES_TOO_LARGE };
+    frames.push(encoded);
   }
-  return { ok: true, result: { frames } };
+  return cancelled() ? null : { ok: true, result: { frames } };
 }
 
+/** How many cancelled ids a pane remembers (a cancel for a request it never had is kept too). */
+const CANCELS_KEPT = 100;
+
 /**
- * A pane's answer on the editor link: `ping` (it is open: `{kind: 'pane', page}`) and `frames`
+ * A pane's answers on the editor link: `ping` (it is open: `{kind: 'pane', page}`) and `frames`
  * (posted as text with the pane's header: several pictures can be over Node-RED's 5 MB JSON
- * limit); the editor's ops are left to the editor (null). An answer that is refused (the request
- * is over, no permission) is let go.
+ * limit; when that post is refused or fails, a short refusal goes instead, so the agent hears
+ * why). The editor's ops are left to the editor (`request` gives null). `cancel(id)` stops the
+ * drawing of a request another pane answered, between two frames.
  */
-export function answerEditorRequest(api: Api, request: EditorRequest, page: string, source: FrameSource): Promise<void> | null {
-  const quietly = (body: Json, asText = false) => api.post('editor/answer', body, { asText }).then(() => undefined, () => undefined);
-  if (request.op === 'ping') return quietly({ id: request.id, ok: true, result: { kind: 'pane', page } });
-  if (request.op === 'frames') return framesAnswer(request.args, source).then((answer) => quietly({ id: request.id, ...answer }, true));
-  return null;
+export function createPaneAnswers(api: Api, page: string, source: FrameSource): {
+  request(request: EditorRequest): Promise<void> | null;
+  cancel(id: string): void;
+} {
+  const cancels = new Set<string>();
+  const post = (body: Json, asText = false) => api.post('editor/answer', body, { asText });
+  return {
+    request(request) {
+      if (request.op === 'ping') return post({ id: request.id, ok: true, result: { kind: 'pane', page } }).then(() => undefined, () => undefined);
+      if (request.op !== 'frames') return null;
+      return framesAnswer(request.args, source, () => cancels.has(request.id)).then(async (outcome) => {
+        if (!outcome) return;
+        try {
+          await post({ id: request.id, ...outcome }, true);
+        } catch {
+          if (outcome.ok) await post({ id: request.id, ok: false, error: PANE_FRAMES_TOO_LARGE }).catch(() => undefined);
+        }
+      });
+    },
+    cancel(id) {
+      cancels.add(id);
+      if (cancels.size > CANCELS_KEPT) cancels.delete(cancels.values().next().value!);
+    },
+  };
 }

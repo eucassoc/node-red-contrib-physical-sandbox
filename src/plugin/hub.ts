@@ -24,7 +24,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { applyState, decode, isTopicName, newStore, parseTopic } from '../pscom/state.js';
-import { recordToMessages, type Device, type Message, type Scene } from '../core/stream.js';
+import { messagesToRecord, recordToMessages, type Device, type Message, type Scene } from '../core/stream.js';
 import { PsComClient, tokenFileIn, type LoginStatus } from '../core/pscom-client.js';
 import { pending, sendAll, unsentDirIn, type SendAllResult, type Sender, type SentCopy } from '../core/unsent.js';
 import { isLocalMachine } from '../core/machines.js';
@@ -140,9 +140,10 @@ export interface Hub {
    */
   liveBuffer(): Message[];
   /**
-   * The states the stream had at each of `times` (seconds from its first state, by `at`): for each
-   * time, the latest state of every topic, built up as a pane builds it (a mover's joints and place
-   * add up), as the snapshot gives them; and how long the stream is [s]. Null when it is empty.
+   * What the stream, saved now as a record, replays at each of `times` [s]: for each time, the
+   * latest state of every device, built up as a pane builds it (a mover's joints and place add up),
+   * as the snapshot gives them; and how long it is [s] (its longest trace). Each device counts from
+   * its own first state, as a saved record keeps it. Null when it has no state of a device.
    */
   statesAt(times: number[]): { states: Message[][]; duration: number } | null;
   /** Empty the stream buffer and forget the latest states (an empty snapshot goes to the panes). */
@@ -446,22 +447,22 @@ export function createHub(RED: any, opts: HubOptions): Hub {
   }
 
   function statesAt(times: number[]): { states: Message[][]; duration: number } | null {
-    // A stable sort: states of the same `at` stay in the order they came
-    const all = [...loaded, ...live].filter((m) => parseTopic(m.topic)?.kind === 'state').sort((a, b) => a.at - b.at);
+    // The save's own timeline: the buffer as a record, then that record's states (time order, from 0)
+    const { record } = messagesToRecord(scene, [...loaded, ...live]);
+    const all = recordToMessages(record, { site: scene.site }).messages;
     if (!all.length) return null;
-    const first = all[0].at;
     const states: Message[][] = new Array(times.length);
     const at = newStore();
     let next = 0;
     for (const { t, i } of times.map((t, i) => ({ t, i })).sort((a, b) => a.t - b.t)) {
-      const until = first + t * 1000;
+      const until = Math.round(t * 1000);
       for (; next < all.length && all[next].at <= until; next += 1) {
         const m = all[next];
         applyState(at, { id: m.topic, type: isItemTopic(parseTopic(m.topic)!.id, m.payload) ? 'item' : 'mover' }, m.payload);
       }
       states[i] = snapshot(at);
     }
-    return { states, duration: (all[all.length - 1].at - first) / 1000 };
+    return { states, duration: all[all.length - 1].at / 1000 };
   }
 
   /** An empty buffer and no latest states (an empty snapshot goes to the panes). */
