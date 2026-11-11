@@ -6,7 +6,7 @@
   "author": "Atsushi Kojo",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/joeartsea/node-red-contrib-physical-sandbox.git"
+    "url": "git+https://github.com/eucassoc/node-red-contrib-physical-sandbox.git"
   },
   "keywords": [
     "node-red"
