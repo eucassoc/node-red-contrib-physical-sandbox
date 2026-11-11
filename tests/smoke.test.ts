@@ -55,6 +55,7 @@ before(async () => {
     logging: { console: { level: 'off', metrics: false, audit: false } },
     telemetry: { enabled: false },
     editorTheme: { tours: false },
+    physicalSandbox: { site: 'smoke', catalogBase: 'http://127.0.0.1:9' },
   });
   server.on('request', RED.httpAdmin);
   await RED.start();
@@ -127,4 +128,59 @@ test('the editor gets the templates and help of both nodes', async () => {
     assert.match(body, new RegExp(`data-template-name="${type}"`));
     assert.match(body, new RegExp(`data-help-name="${type}"`));
   }
+});
+
+/** Subscribe to `ps-pane/#` on Node-RED's comms socket as an editor does; the messages it is sent. */
+async function paneSocket(): Promise<{ received: { topic: string; data: any }[]; close: () => void }> {
+  const ws = new WebSocket(base.replace(/^http/, 'ws') + '/comms');
+  const received: { topic: string; data: any }[] = [];
+  ws.addEventListener('message', (event) => {
+    for (const m of JSON.parse(String(event.data))) received.push(m);
+  });
+  await new Promise<void>((done, fail) => { ws.addEventListener('open', () => done()); ws.addEventListener('error', fail); });
+  ws.send(JSON.stringify({ subscribe: 'ps-pane/#' }));
+  return { received, close: () => ws.close() };
+}
+
+async function until<T>(get: () => T | undefined, what: string): Promise<T> {
+  for (let i = 0; i < 100; i += 1) {
+    const value = get();
+    if (value !== undefined) return value;
+    await new Promise((done) => setTimeout(done, 20));
+  }
+  throw new Error(`waited for ${what}`);
+}
+
+test('the plugin answers on the admin app with the scene of the configured site', async () => {
+  const { status, body } = await get('/physical-sandbox/scene', 'application/json');
+  assert.equal(status, 200);
+  assert.equal(JSON.parse(body).site, 'smoke');
+});
+
+test('two editors see the same stream, and one that subscribes late gets the scene and the latest state at once', async () => {
+  const hub = nodeRedRequire('@node-red/registry').getPlugin('physical-sandbox').hub;
+  const early = await paneSocket();
+  try {
+    await until(() => early.received.find((m) => m.topic === 'ps-pane/scene'), 'the scene');
+    hub.setScene({ devices: [{ id: 'arm', product: 'physical-sandbox/so101:1', owner: 'viewer', parent: 'site', pose: { xyz: [0, 0, 0], rpy: [0, 0, 0] } }], names: { arm: 'arm' } });
+    assert.equal(hub.push({ topic: 'ps/smoke/arm/state', payload: { at: 1, joints: { j: 0.5 } } }, 'mqtt'), true);
+    assert.equal(hub.push({ topic: 'ps/smoke/arm/state', payload: { at: 2, joints: { k: 1 } } }, 'mqtt'), true);
+    await new Promise((done) => setTimeout(done, 150)); // the snapshot goes at most ten times a second
+
+    const late = await paneSocket();
+    try {
+      const scene = await until(() => late.received.find((m) => m.topic === 'ps-pane/scene')?.data, 'the scene, late');
+      assert.deepEqual(scene.devices.map((d: any) => d.id), ['arm']);
+      const snapshot = await until(() => late.received.find((m) => m.topic === 'ps-pane/snapshot')?.data, 'the snapshot, late');
+      assert.deepEqual(snapshot, [{ topic: 'ps/smoke/arm/state', payload: { at: 2, joints: { j: 0.5, k: 1 } }, at: 2 }]);
+      const status = await until(() => late.received.find((m) => m.topic === 'ps-pane/status')?.data, 'the status, late');
+      assert.equal(status.recorded, 2);
+
+      hub.push({ topic: 'ps/smoke/arm/state', payload: { at: 3, joints: { j: 1 } } }, 'mqtt');
+      for (const pane of [early, late]) {
+        const state = await until(() => pane.received.find((m) => m.topic === 'ps-pane/state' && m.data.at === 3)?.data, 'the state at 3');
+        assert.deepEqual(state.payload, { at: 3, joints: { j: 1 } });
+      }
+    } finally { late.close(); }
+  } finally { early.close(); }
 });

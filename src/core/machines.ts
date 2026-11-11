@@ -138,6 +138,26 @@ export async function listMachines(opts: ListOptions): Promise<{ machines: Machi
   return { machines, offline };
 }
 
+/** Whether a bare product name is a robot of a configured local folder (one PS.com does not have). */
+export function isLocalMachine(name: string, localDirs: string[]): boolean {
+  return typeof name === 'string' && !name.includes('/') && localEntries(localDirs).some((l) => l.name === name);
+}
+
+/**
+ * Where a row of `listMachines` is served from, without asking the catalog again (the listing
+ * found it): a local row from its folder, a cache row from the cache, a catalog row through the
+ * catalog route. Null when the row's place is gone meanwhile.
+ */
+export function resolveListed(row: MachineRow, roots: Roots): Resolved | null {
+  if (row.source === 'local') {
+    const local = localEntries(roots.localDirs).find((l) => l.name === row.ref);
+    return local ? resolvedAt('local', local.slot) : null;
+  }
+  const parts = parseRef(row.ref);
+  if (!parts || parts.version === 'latest') return null;
+  return resolvedAt(row.source, `${parts.handle}/${parts.name}/${parts.version}`);
+}
+
 /** A relative path to be put in a URL: no empty, `.` or `..` part, no backslash or NUL, not absolute. */
 function urlPath(rel: string): string {
   const parts = typeof rel === 'string' ? rel.split('/') : [];

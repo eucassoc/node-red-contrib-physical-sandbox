@@ -178,6 +178,12 @@ export class PsComClient {
     return { signedIn: true, handle: typeof kept.handle === 'string' && kept.handle ? kept.handle : null };
   }
 
+  /** The kept token while signed in (for the catalog's private robots), else undefined. */
+  bearer(): string | undefined {
+    const token = this.kept()?.token;
+    return typeof token === 'string' ? token : undefined;
+  }
+
   /** The kept token file's content while it is for this base and has not expired. */
   private kept(): Json | null {
     let kept: unknown;
