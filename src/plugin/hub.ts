@@ -401,7 +401,13 @@ export function createHub(RED: any, opts: HubOptions): Hub {
   let openedFloor: string | null = null;
   let agentFrames = false;
 
-  const cornersKey = (floor: Scene['floor']): string | null => (floor ? JSON.stringify(floor.corners) : null);
+  /**
+   * A floor's corners to the millimetre: a record keeps them so (floor-frame.js floorFromWorld), the
+   * floor the pane decided has them as solved, and both are the same floor.
+   */
+  const mm = (v: number) => Math.round(v * 1000) / 1000 + 0;
+  const cornersKey = (floor: Scene['floor']): string | null =>
+    (floor ? JSON.stringify(floor.corners.map(({ x, y, z }) => [mm(x), mm(y), mm(z)])) : null);
 
   function open(record: Json, source: Opened): Scene {
     stopRun();

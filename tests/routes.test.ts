@@ -968,3 +968,25 @@ test('stream/play {replay: true} plays the opened record from the hub\'s copy: n
     assert.deepEqual([r.json.source, r.json.duration], ['walk.record.json', 1]);
   } finally { await s.close(); await fake.stop(); }
 });
+
+test('a record saved from the pane opens again on its floor with the camera kept', async () => {
+  const fake = await new FakePsCom().start();
+  const s = await setup({ catalogBase: fake.base });
+  try {
+    let r = await s.call('POST', '/physical-sandbox/scene/floor', { pixels: pixelsOf(TURNED_FLOOR), edgesM: [4, 9], width: WIDTH, height: HEIGHT });
+    assert.equal(r.json.derived, true, 'the depth comes from the picture');
+    const camera = s.hub.scene().camera;
+    assert.ok(camera);
+    r = await s.call('POST', '/physical-sandbox/scene/place', { product: 'physical-sandbox/so101:1', xyz: [1, 1] });
+    assert.equal(r.status, 200, r.text);
+    await s.hub.client.loginStart();
+    await s.hub.client.loginPoll();
+    r = await s.call('POST', '/physical-sandbox/record/save', { mode: 'new', name: 'yard' });
+    assert.deepEqual([r.json.saved, r.json.ref], [true, 'ada/yard'], r.text);
+
+    r = await s.call('POST', '/physical-sandbox/stream/play', { ref: 'ada/yard' });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(s.hub.scene().camera, camera, 'the same floor, to the millimetre: the camera still fits');
+    assert.equal(s.hub.floorIsKnown(), true);
+  } finally { await s.close(); await fake.stop(); }
+});
