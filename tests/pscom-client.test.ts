@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { Moved, Offline, PsComClient, Refused, SignIn, Taken, tokenFileIn } from '../src/core/pscom-client.js';
 import { FakePsCom } from './helpers/fake-pscom.js';
 
+const appRecord = JSON.parse(readFileSync(new URL('./fixtures/app-record-v3.json', import.meta.url), 'utf8'));
+
 const tmp = (): string => mkdtempSync(join(tmpdir(), 'ps-client-'));
 const record = (extra: Record<string, unknown> = {}) => ({
   schemaVersion: 3,
@@ -14,10 +16,10 @@ const record = (extra: Record<string, unknown> = {}) => ({
   traces: {}, ...extra,
 });
 
-async function setup(opts: { signedIn?: boolean } = {}) {
+async function setup(opts: { signedIn?: boolean; isLocalMachine?: (name: string) => boolean } = {}) {
   const fake = await new FakePsCom().start();
   const tokenFile = tokenFileIn(tmp());
-  const client = new PsComClient({ base: fake.base, tokenFile, pollMs: 0 });
+  const client = new PsComClient({ base: fake.base, tokenFile, pollMs: 0, isLocalMachine: opts.isLocalMachine });
   if (opts.signedIn !== false) {
     await client.loginStart();
     assert.equal(await client.loginPoll(), 'approved');
@@ -80,25 +82,32 @@ test('signing in: gives up after 600 s without asking again', async () => {
   } finally { await fake.stop(); }
 });
 
-test('signing in: never two polls at once, and polls are 3 s apart', async () => {
+test('signing in: never two polls at once; sooner than 3 s apart answers pending without a request', async () => {
   const fake = await new FakePsCom().start();
   try {
     fake.approveAfter = 1;
     fake.pollDelayMs = 30;
     let now = 0;
-    const waits: number[] = [];
-    const client = new PsComClient({
-      base: fake.base, tokenFile: tokenFileIn(tmp()), now: () => now,
-      sleep: async (ms: number) => { waits.push(ms); now += ms; },
-    });
+    const client = new PsComClient({ base: fake.base, tokenFile: tokenFileIn(tmp()), now: () => now });
+    const polls = () => fake.calls.filter((c) => c.path === '/api/vr/poll').length;
     await client.loginStart();
+    now = 2999; // too soon after the start
+    const started = Date.now();
+    assert.equal(await client.loginPoll(), 'pending');
+    assert.ok(Date.now() - started < 1000, 'answered at once, without waiting');
+    assert.equal(polls(), 0);
+    now = 3000;
     const [a, b] = [client.loginPoll(), client.loginPoll()];
     assert.equal(a, b);
     assert.equal(await a, 'pending');
+    assert.equal(polls(), 1);
     assert.equal(fake.maxPollsInFlight, 1);
-    now += 1000;
+    now = 5999; // too soon after that poll
+    assert.equal(await client.loginPoll(), 'pending');
+    assert.equal(polls(), 1);
+    now = 6000;
     assert.equal(await client.loginPoll(), 'approved');
-    assert.deepEqual(waits, [3000, 2000]); // the first poll waits 3 s after the start, the second 3 s after the first
+    assert.equal(polls(), 2);
   } finally { await fake.stop(); }
 });
 
@@ -189,17 +198,27 @@ test('PS.com unreachable is Offline; 5xx and other refusals are Refused with cod
   await assert.rejects(client.saveRecord('walk', record(), 'new'), Offline);
 });
 
-test('a record naming a bare local robot is refused before any request', async () => {
-  const { fake, client } = await setup();
+test('a record naming a robot only this machine has is refused before any request', async () => {
+  const { fake, client } = await setup({ isLocalMachine: (name) => name === 'myarm' });
   try {
     const before = fake.calls.length;
     const local = record();
-    (local.equipment.devices[0] as any).product = 'so101';
+    (local.equipment.devices[0] as any).product = 'myarm';
     const err = await client.saveRecord('walk', local, 'new').catch((e) => e);
     assert.ok(err instanceof Refused);
     assert.equal(err.code, 'local-machine');
-    assert.equal(err.message, '手元のロボット so101 は PS.com にありません。psbx push でロボットを上げてから保存してください');
+    assert.equal(err.message, '手元のロボット myarm は PS.com にありません。psbx push でロボットを上げてから保存してください');
     assert.equal(fake.calls.length, before);
+  } finally { await fake.stop(); }
+});
+
+test('a record the PS.com app wrote (bare ids such as so101, scout) is sent unchanged', async () => {
+  const { fake, client } = await setup({ isLocalMachine: (name) => name === 'myarm' });
+  try {
+    const products = appRecord.equipment.devices.map((d: any) => d.product);
+    assert.ok(products.includes('so101') && products.includes('scout'));
+    assert.deepEqual(await client.saveRecord('app', appRecord, 'new'), { ref: 'ada/app', version: '1', unchanged: false });
+    assert.deepEqual(fake.record('ada', 'app', '1'), appRecord);
   } finally { await fake.stop(); }
 });
 

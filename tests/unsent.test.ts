@@ -15,9 +15,9 @@ const record = (name = 'r', product = 'physical-sandbox/so101:1') => ({
   traces: {},
 });
 
-async function signedIn(userDir: string) {
+async function signedIn(userDir: string, isLocalMachine?: (name: string) => boolean) {
   const fake = await new FakePsCom().start();
-  const client = new PsComClient({ base: fake.base, tokenFile: tokenFileIn(userDir), pollMs: 0 });
+  const client = new PsComClient({ base: fake.base, tokenFile: tokenFileIn(userDir), pollMs: 0, isLocalMachine });
   await client.loginStart();
   assert.equal(await client.loginPoll(), 'approved');
   return { fake, client, sender: client.saveRecord.bind(client) as Sender };
@@ -212,18 +212,23 @@ test('save on a server error keeps a copy; another refusal is thrown and keeps n
   } finally { await fake.stop(); }
 });
 
-test('save of a record naming a bare local robot answers local-machine and keeps a copy', async () => {
+test('save of a record naming a robot only this machine has answers local-machine and keeps a copy', async () => {
   const userDir = tmp();
-  const { fake, client } = await signedIn(userDir);
+  const { fake, client } = await signedIn(userDir, (name) => name === 'myarm');
   try {
     const dir = unsentDirIn(userDir);
     const before = fake.calls.length;
-    const out = await save(dir, client.saveRecord.bind(client), record('r', 'so101'), { ref: 'walk', mode: 'new', base: null });
+    const out = await save(dir, client.saveRecord.bind(client), record('r', 'myarm'), { ref: 'walk', mode: 'new', base: null });
     assert.deepEqual(out, {
       saved: false, unsent: 'walk', code: 'local-machine',
-      reason: '手元のロボット so101 は PS.com にありません。psbx push でロボットを上げてから保存してください',
+      reason: '手元のロボット myarm は PS.com にありません。psbx push でロボットを上げてから保存してください',
     });
     assert.equal(fake.calls.length, before);
+    assert.deepEqual(pending(dir).map((p) => p.name), ['walk']);
+    // a bare id that is not a local robot (PS.com's own so101) is saved as it is
+    const saved = await save(dir, client.saveRecord.bind(client), record('s', 'so101'), { ref: 'ada/run', mode: 'new', base: null });
+    assert.equal(saved.saved, true);
+    assert.equal(fake.record('ada', 'run', '1').equipment.devices[0].product, 'so101');
   } finally { await fake.stop(); }
 });
 

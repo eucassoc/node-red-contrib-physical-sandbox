@@ -3,15 +3,17 @@
  *
  * - Signing in is the headset's device-code flow (`/api/vr/start`, `/api/vr/poll`), as psbx `login`:
  *   `loginStart` asks for a code to enter at `{base}/vr`; the pane then calls `loginPoll` again and
- *   again. The client keeps polls 3 s apart, never has two polls open at once (a call while one is
- *   open gets the same promise) and gives up 600 s after the start. The token is kept in
+ *   again. The client keeps polls 3 s apart (a call sooner answers `pending` without a request),
+ *   never has two polls open at once (a call while one is open gets the same promise) and gives up
+ *   600 s after the start. The token is kept in
  *   `<userDir>/physical-sandbox/ps-com-token.json` (mode 0600) as `{base, token, expiresAt, handle}`,
  *   the same shape psbx keeps; `status()` reads that file alone.
  * - `saveRecord` PUTs a record through the catalog door: `new` makes a new item (`new=1`), `over`
  *   the next version of an item (`base=` the version it was made from). The server numbers the
  *   versions and never writes over one; bytes equal to the latest make no version (`unchanged`).
- *   A record naming a bare local robot is refused before any request: Node-RED has no URDF to send
- *   with it (psbx does).
+ *   A record naming a robot only this machine has (`isLocalMachine`) is refused before any request:
+ *   Node-RED has no URDF to send with it. Other bare names (PS.com's own ids in records the PS.com
+ *   app wrote) go as they are, as psbx sends a record made from a PS.com record.
  * - `openRecord` reads a record and says which version it is, the item's latest at that moment
  *   and whether it is the signed-in person's own (the only kind that can be saved over).
  *
@@ -43,7 +45,12 @@ export interface ClientOptions {
   /** One request's limit (120 s, as psbx). */
   timeoutMs?: number;
   now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
+  /**
+   * Whether a bare product name is a robot only this machine has (a local folder): a record naming
+   * one cannot be uploaded from here. Other bare names (PS.com's own ids such as `so101` in records
+   * the PS.com app wrote) are sent as they are. Default: none is local.
+   */
+  isLocalMachine?: (name: string) => boolean;
 }
 
 /** Base class of what the client throws. */
@@ -93,7 +100,7 @@ export class PsComClient {
   private readonly giveUpMs: number;
   private readonly timeoutMs: number;
   private readonly now: () => number;
-  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly isLocalMachine: (name: string) => boolean;
   private login: Login | null = null;
   private polling: Promise<'pending' | 'approved' | 'expired'> | null = null;
 
@@ -105,7 +112,7 @@ export class PsComClient {
     this.giveUpMs = opts.giveUpMs ?? GIVE_UP_MS;
     this.timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
     this.now = opts.now ?? Date.now;
-    this.sleep = opts.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.isLocalMachine = opts.isLocalMachine ?? (() => false);
   }
 
   // ---- signing in ----
@@ -122,7 +129,8 @@ export class PsComClient {
   }
 
   /**
-   * One poll of the login under way, at least 3 s after the previous one. `approved` keeps the token
+   * One poll of the login under way. Sooner than 3 s after the start or the previous poll it answers
+   * `pending` at once without a request. `approved` keeps the token
    * (and the handle); `expired` ends the login (the code expired, or 600 s went by). With no login under
    * way it answers from the token file: `approved` when signed in, else `expired`.
    */
@@ -136,12 +144,11 @@ export class PsComClient {
   private async pollOnce(): Promise<'pending' | 'approved' | 'expired'> {
     const login = this.login;
     if (!login) return this.status().signedIn ? 'approved' : 'expired';
-    const wait = login.lastPollAt + this.pollMs - this.now();
-    if (wait > 0) await this.sleep(wait);
     if (this.now() - login.startedAt >= this.giveUpMs) {
       this.login = null;
       return 'expired';
     }
+    if (this.now() - login.lastPollAt < this.pollMs) return 'pending'; // too soon: answered without a request
     login.lastPollAt = this.now();
     const body = await this.call('POST', '/api/vr/poll', { body: { deviceCode: login.deviceCode } });
     if (this.login !== login) return this.status().signedIn ? 'approved' : 'expired'; // a new login started meanwhile
@@ -223,7 +230,7 @@ export class PsComClient {
    * (Moved when the latest is another). Always private when the item is new.
    */
   async saveRecord(ref: string, record: object, mode: SaveMode, base?: string | null): Promise<Saved> {
-    const local = localProducts(record);
+    const local = localProducts(record).filter((name) => this.isLocalMachine(name));
     if (local.length) throw new Refused('local-machine', 0, LOCAL_MACHINE.replace('{name}', local.join(', ')));
     const { handle: owner, name } = splitRef(ref);
     if (mode !== 'new' && mode !== 'over') throw new TypeError(`mode must be 'new' or 'over', not ${String(mode)}`);
@@ -313,7 +320,7 @@ function splitRef(ref: string): { handle: string | null; name: string; version: 
   return { handle: m[1] ?? null, name: m[2], version: m[3] ?? null };
 }
 
-/** The bare product names (no `handle/`) the record's devices name, each once. */
+/** The bare product names (no `handle/`) the record's devices name, each once (local or PS.com's own ids). */
 export function localProducts(record: unknown): string[] {
   const devices = isObject(record) && isObject(record.equipment) && Array.isArray(record.equipment.devices) ? record.equipment.devices : [];
   const out: string[] = [];
