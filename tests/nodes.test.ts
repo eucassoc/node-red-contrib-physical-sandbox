@@ -162,7 +162,7 @@ test('ps in with a site that is not a site name says so in red and takes nothing
   await settle();
   assert.deepEqual(hub.pushed, []);
   assert.deepEqual(out, []);
-  assert.deepEqual(seen.at(-1), { fill: 'red', shape: 'ring', text: 'サイト名が正しくありません (bad site name)' });
+  assert.deepEqual(seen.at(-1), { fill: 'red', shape: 'ring', text: '現地の名前が正しくありません (bad site name)' });
 });
 
 // ---- ps play ----

@@ -54,6 +54,8 @@ export interface Status {
   opened: { ref: string; version: string; own: boolean } | { file: string } | null;
   /** The plugin's site (its settings): 「現地をもとに戻す」 goes back to it. */
   defaultSite: string;
+  /** The stream keeps no more (STREAM_MAX): later states move the panes but are not recorded. */
+  full: boolean;
 }
 
 export interface HubOptions {
@@ -64,6 +66,8 @@ export interface HubOptions {
   fetchImpl?: FetchLike;
   /** Between two login polls (3 s; tests use 0). */
   pollMs?: number;
+  /** How many states the stream keeps (STREAM_MAX; tests use a few). */
+  streamMax?: number;
 }
 
 export interface Hub {
@@ -197,6 +201,7 @@ export function validMessage(raw: unknown): Message | null {
 export function createHub(RED: any, opts: HubOptions): Hub {
   const { userDir, settings } = opts;
   const clock = opts.clock ?? realClock;
+  const streamMax = opts.streamMax ?? STREAM_MAX;
   const root = join(userDir, 'physical-sandbox');
   const dirs = { root, unsent: unsentDirIn(userDir), backgrounds: join(root, 'backgrounds'), exports: join(root, 'exports') };
   const sceneFile = join(root, 'scene.json');
@@ -356,7 +361,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
       const key = deviceKey(message.topic);
       if (loadedKeys.delete(key)) loaded = loaded.filter((m) => deviceKey(m.topic) !== key);
     }
-    if (live.length < STREAM_MAX) live.push(message);
+    if (live.length < streamMax) live.push(message);
   }
 
   /** An empty buffer and no latest states (an empty snapshot goes to the panes). */
@@ -462,6 +467,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
       recorded: recordedCount(),
       opened: !opened ? null : 'ref' in opened ? { ref: opened.ref, version: opened.version, own: opened.own } : { file: opened.file },
       defaultSite: settings.site,
+      full: live.length >= streamMax,
     };
   }
 

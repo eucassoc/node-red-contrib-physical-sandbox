@@ -38,7 +38,7 @@ test('a new hub has an empty scene on the configured site and tells the panes at
   assert.deepEqual(red.retained('ps-pane/scene'), hub.scene());
   assert.deepEqual(red.retained('ps-pane/snapshot'), []);
   assert.deepEqual(red.retained('ps-pane/status'), {
-    login: { signedIn: false, handle: null }, unsent: [], playing: null, agentFrames: false, recorded: 0, opened: null, defaultSite: 'yard',
+    login: { signedIn: false, handle: null }, unsent: [], playing: null, agentFrames: false, recorded: 0, opened: null, defaultSite: 'yard', full: false,
   });
 });
 
@@ -322,4 +322,20 @@ test('a message for another site than the scene\'s moves nothing: not sent, not 
   assert.deepEqual(red.retained('ps-pane/snapshot'), []);
   assert.equal(hub.push({ topic: 'ps/yard/arm/state', payload: { at: 1, joints: { j: 1 } } }, 'mqtt'), true);
   assert.equal(hub.status().defaultSite, 'yard', 'the status says the plugin\'s site');
+});
+
+test('a full stream says so in the status: later live states move the panes but are not kept', () => {
+  const userDir = tmp();
+  const red = fakeRed({ userDir });
+  const clock = fakeClock();
+  const hub = createHub(red.RED, { userDir, settings: readSettings({}, { userDir, env: {} }), clock, streamMax: 3, fetchImpl: async () => { throw new Error('no network'); } });
+  for (let at = 1; at <= 3; at += 1) hub.push({ topic: 'ps/local/arm/state', payload: { at, joints: { j: at } } }, 'mqtt');
+  assert.equal(hub.status().full, true);
+  assert.equal(hub.push({ topic: 'ps/local/arm/state', payload: { at: 4, joints: { j: 4 } } }, 'mqtt'), true);
+  assert.equal(hub.streamBuffer().length, 3);
+  assert.equal(states(red.published).at(-1).payload.at, 4);
+  clock.advance(SNAPSHOT_MS);
+  assert.equal(red.retained('ps-pane/status').full, true);
+  hub.clearStream();
+  assert.equal(hub.status().full, false);
 });

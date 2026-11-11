@@ -17,7 +17,7 @@ interface PsInDef extends NodeDef { site?: string }
 const WORDS = {
   notLoaded: 'プラグインが読み込まれていません',
   unreadable: '読み込めないメッセージ',
-  badSite: 'サイト名が正しくありません (bad site name)',
+  badSite: '現地の名前が正しくありません (bad site name)',
 };
 
 export default function psInNode(RED: NodeAPI): void {

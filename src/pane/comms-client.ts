@@ -169,9 +169,10 @@ export function createApi(opts: { base: string; token: () => string | null; fetc
       else headers['Content-Type'] = 'application/json';
       return answer(await doFetch(url(path), { method: 'POST', headers, body: body === undefined ? undefined : JSON.stringify(body) }));
     },
-    upload: async (path, file, name) => answer(await doFetch(`${url(path)}?name=${encodeURIComponent(name)}`, {
+    // The file's name goes in a header, not in the address (addresses end up in logs)
+    upload: async (path, file, name) => answer(await doFetch(url(path), {
       method: 'POST',
-      headers: { ...auth(), 'X-PS-Pane': '1', 'Content-Type': 'application/octet-stream' },
+      headers: { ...auth(), 'X-PS-Pane': '1', 'Content-Type': 'application/octet-stream', 'X-PS-Name': encodeURIComponent(name) },
       body: file,
     })),
   };

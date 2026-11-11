@@ -139,7 +139,7 @@ test('every POST says it comes from the pane: JSON, or the pane\'s header (no bo
     ['/physical-sandbox/scene/place', 'POST', { Authorization: 'Bearer T', 'Content-Type': 'application/json' }],
     ['/physical-sandbox/stream/stop', 'POST', { Authorization: 'Bearer T', 'X-PS-Pane': '1' }],
     ['/physical-sandbox/stream/play', 'POST', { Authorization: 'Bearer T', 'X-PS-Pane': '1', 'Content-Type': 'text/plain;charset=utf-8' }],
-    ['/physical-sandbox/scene/background?name=a%20b.png', 'POST', { Authorization: 'Bearer T', 'X-PS-Pane': '1', 'Content-Type': 'application/octet-stream' }],
+    ['/physical-sandbox/scene/background', 'POST', { Authorization: 'Bearer T', 'X-PS-Pane': '1', 'Content-Type': 'application/octet-stream', 'X-PS-Name': 'a%20b.png' }],
     ['/physical-sandbox/scene', 'GET', { Authorization: 'Bearer T' }],
   ]);
   assert.equal(calls[0][1].body, JSON.stringify({ product: 'p' }));

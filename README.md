@@ -36,7 +36,9 @@ another screen. Both show the same scene and the same stream, so you can use eit
   (`~/.cache/physical-sandbox`) and local folders (below). Drag a robot onto the floor to place it. Without a
   connection to PS.com, only the robots on this computer are listed.
 - **Records.** Open one of your own records on PS.com (the list needs a sign-in), a record by `handle/name`, or
-  a record file from this computer. Then play, stop or go back to the start.
+  a record file from this computer. Then play, stop or go back to the start (these play the open record
+  again; only opening reads it). The pane shows the site (「現地」) whose messages it takes: opening a record
+  takes the record's site, and 「現地をもとに戻す」 goes back to the plugin's.
 - **Recording the stream.** States that arrive through `ps in` are kept as a record in the pane, as they come.
 - **Saving.** 「上書き保存」 (Save) makes the next version of the record you opened. 「新しい記録として保存」
   (Save as a new record) makes a new record under a name you give. Versions are never written over.
@@ -98,7 +100,8 @@ Press 「PS.com にログイン」 in the pane. It shows a 6-digit code and the 
 If a save cannot reach PS.com (offline, signed out, PS.com failing), the record is kept in
 `<userDir>/physical-sandbox/unsent/` and the pane shows 「PS.com 未保存」 with a button 「再送信する」 (Send
 again). It survives a restart of Node-RED. If the record you saved over was changed elsewhere meanwhile, your
-copy is saved as a new record and the pane says so.
+copy is saved as a new record and the pane says so. A copy that can never go (it uses a robot only this
+computer has, or belongs to another account) can be taken away with 「取り除く」 on its line.
 
 ## Privacy and limits
 

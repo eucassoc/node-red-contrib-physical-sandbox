@@ -5,10 +5,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
-import { createHub } from '../src/plugin/hub.js';
+import { createHub, STREAM_MAX } from '../src/plugin/hub.js';
 import { registerRoutes, safeName, WORDS } from '../src/plugin/routes.js';
 import { WORDS as PANE_WORDS } from '../src/pane/words.js';
-import { exportedText, savedText } from '../src/pane/records-ui.js';
+import { exportedText, fullLine, savedText, STREAM_MAX as PANE_STREAM_MAX } from '../src/pane/records-ui.js';
 import { readSettings } from '../src/plugin/settings.js';
 import { pending } from '../src/core/unsent.js';
 import { intrinsicsFromFov, extrinsicsFromPose, projectPoint } from '../src/pscom/camera-model.js';
@@ -40,7 +40,7 @@ function catalogFetch(calls: string[] = [], hold?: () => Promise<void>) {
       const kind = u.searchParams.get('kind');
       return json({ items: kind === 'machine' ? [{ handle: 'physical-sandbox', name: 'so101', latest_version: '1', display: { ja: 'SO-101' }, kind }] : [] });
     }
-    if (u.pathname.endsWith('/manifest')) return json({ bundle: 'bundle.json', kind: 'machine' });
+    if (u.pathname.endsWith('/manifest') && !u.pathname.includes('/nothing/')) return json({ bundle: 'bundle.json', kind: 'machine' });
     if (u.pathname.endsWith('/files/bundle.json')) return json({ id: 'so101', links: { base: { visuals: [{ mesh: 'assets/a.bin' }, { mesh: 'assets/b.bin' }] } } });
     if (u.pathname.endsWith('/files/assets/a.bin') || u.pathname.endsWith('/files/assets/b.bin')) {
       return { ok: true, status: 200, json: async () => ({}), arrayBuffer: async () => new TextEncoder().encode(`bytes ${u.pathname.slice(-5)}`).buffer };
@@ -58,12 +58,13 @@ async function setup(o: { catalogBase?: string; localDirs?: string[]; cacheRoot?
   registerRoutes(red.RED, hub, { paneDir: o.paneDir ?? tmp(), cacheRoot: o.cacheRoot ?? tmp(), fetchImpl: catalogFetch(o.calls, o.hold) as any });
   const base = await red.listen();
   // The pane's header goes with every call unless `pane: false`
-  const call = async (method: string, path: string, body?: unknown, init: { type?: string; raw?: Buffer; pane?: boolean } = {}) => {
+  const call = async (method: string, path: string, body?: unknown, init: { type?: string; raw?: Buffer; pane?: boolean; headers?: Record<string, string> } = {}) => {
     const res = await fetch(base + path, {
       method,
       headers: {
         ...(body !== undefined || init.raw ? { 'Content-Type': init.type ?? (init.raw ? 'application/octet-stream' : 'application/json') } : {}),
         ...(init.pane === false ? {} : { 'X-PS-Pane': '1' }),
+        ...init.headers,
       },
       body: init.raw ? new Uint8Array(init.raw) : body === undefined ? undefined : JSON.stringify(body),
     });
@@ -124,7 +125,7 @@ test('GET scene answers the scene', async () => {
 test('a background still or video is kept in the user directory, set on the scene and served back', async () => {
   const s = await setup();
   try {
-    let r = await s.call('POST', '/physical-sandbox/scene/background?name=' + encodeURIComponent('../../site photo.png'), undefined, { raw: PNG });
+    let r = await s.call('POST', '/physical-sandbox/scene/background', undefined, { raw: PNG, headers: { 'X-PS-Name': encodeURIComponent('../../site photo.png') } });
     assert.equal(r.status, 200);
     assert.deepEqual(r.json.background, { kind: 'still', name: 'site photo.png' });
     assert.deepEqual(s.hub.scene().background, { kind: 'still', name: 'site photo.png' });
@@ -134,7 +135,7 @@ test('a background still or video is kept in the user directory, set on the scen
     assert.equal(got.headers.get('content-type'), 'image/png');
     assert.deepEqual(Buffer.from(await got.arrayBuffer()), PNG);
 
-    r = await s.call('POST', '/physical-sandbox/scene/background?name=walk.mp4', undefined, { raw: MP4, type: 'video/mp4' });
+    r = await s.call('POST', '/physical-sandbox/scene/background', undefined, { raw: MP4, type: 'video/mp4', headers: { 'X-PS-Name': 'walk.mp4' } });
     assert.deepEqual(r.json.background, { kind: 'video', name: 'walk.mp4' });
     assert.deepEqual(readdirSync(dir), ['walk.mp4'], 'only the picture in use is kept');
     assert.equal(s.red.retained('ps-pane/scene').background.kind, 'video');
@@ -144,10 +145,10 @@ test('a background still or video is kept in the user directory, set on the scen
 test('a background that is not a picture or a video, or is over 50 MB, is refused in Japanese', async () => {
   const s = await setup();
   try {
-    let r = await s.call('POST', '/physical-sandbox/scene/background?name=notes.txt', undefined, { raw: Buffer.from('just some text, not a picture') });
+    let r = await s.call('POST', '/physical-sandbox/scene/background', undefined, { raw: Buffer.from('just some text, not a picture') });
     assert.equal(r.status, 415);
     assert.equal(r.json.error, WORDS.notPicture);
-    r = await s.call('POST', '/physical-sandbox/scene/background?name=big.png', undefined, { raw: Buffer.concat([PNG, Buffer.alloc(50 * 1024 * 1024)]) });
+    r = await s.call('POST', '/physical-sandbox/scene/background', undefined, { raw: Buffer.concat([PNG, Buffer.alloc(50 * 1024 * 1024)]) });
     assert.equal(r.status, 413);
     assert.equal(r.json.error, WORDS.backgroundTooLarge);
     assert.equal(s.hub.scene().background, null);
@@ -690,13 +691,13 @@ test('writes come from the pane only: JSON, or the X-PS-Pane header; a cross-sit
     assert.deepEqual(s.hub.scene().devices, [], 'nothing was opened');
     assert.equal((await post('stream/play', { 'Content-Type': 'application/x-www-form-urlencoded' }, 'record=1')).status, 403);
     assert.equal((await post('stream/stop', {})).status, 403, 'no body and no header');
-    assert.equal((await post('scene/background?name=a.png', { 'Content-Type': 'application/octet-stream' }, new Uint8Array(PNG))).status, 403);
+    assert.equal((await post('scene/background', { 'Content-Type': 'application/octet-stream' }, new Uint8Array(PNG))).status, 403);
     assert.equal(s.hub.scene().background, null);
 
     assert.equal((await post('stream/play', { 'Content-Type': 'application/json' }, record)).status, 200, 'JSON alone');
     assert.equal((await post('stream/play', { 'Content-Type': 'text/plain', 'X-PS-Pane': '1' }, record)).status, 200, 'text with the header');
     assert.equal((await post('stream/stop', { 'X-PS-Pane': '1' })).status, 200);
-    assert.equal((await post('scene/background?name=a.png', { 'Content-Type': 'application/octet-stream', 'X-PS-Pane': '1' }, new Uint8Array(PNG))).status, 200);
+    assert.equal((await post('scene/background', { 'Content-Type': 'application/octet-stream', 'X-PS-Pane': '1' }, new Uint8Array(PNG))).status, 200);
   } finally { await s.close(); }
 });
 
@@ -740,7 +741,7 @@ test('a body over the limit is answered 413 at once and no more of it is read', 
   const s = await setup();
   try {
     // Content-Length already over: answered before the body is sent
-    let r = await rawPost(s.base, '/physical-sandbox/scene/background?name=big.png', { 'Content-Type': 'application/octet-stream', 'X-PS-Pane': '1', 'Content-Length': 60 * 1024 * 1024 }, () => null);
+    let r = await rawPost(s.base, '/physical-sandbox/scene/background', { 'Content-Type': 'application/octet-stream', 'X-PS-Pane': '1', 'Content-Length': 60 * 1024 * 1024 }, () => null);
     assert.equal(r.status, 413);
     assert.equal(JSON.parse(r.body).error, WORDS.backgroundTooLarge);
     assert.equal(r.closed, true, 'the connection is closed');
@@ -756,9 +757,13 @@ test('a body over the limit is answered 413 at once and no more of it is read', 
   } finally { await s.close(); clearInterval(alive); }
 });
 
-test('a background name keeps no .. in it', () => {
+test('a background name keeps no .. in it, and at most 200 bytes of UTF-8', () => {
   assert.equal(safeName('../../a..b.png'), 'a.b.png');
   assert.equal(safeName('..'), 'background');
+  const long = safeName(`${'現場の写真'.repeat(30)}.png`);
+  assert.ok(Buffer.byteLength(long) <= 200, `${Buffer.byteLength(long)} bytes`);
+  assert.ok(long.startsWith('現場の写真'));
+  assert.equal(safeName('🙂'.repeat(60)), '🙂'.repeat(50), 'never half a character');
 });
 
 test('every sentence shown to people keeps the package\'s wording (no 直す・決める・読む・機体・絵・版)', async () => {
@@ -1118,4 +1123,37 @@ test('unsent/remove takes away one kept copy; one that is not there is 404; the 
     assert.equal((await s.call('POST', '/physical-sandbox/unsent/remove', { name: '../scene' })).status, 404);
     assert.equal(PANE_WORDS.remove.ja, '取り除く');
   } finally { await s.close(); }
+});
+
+test('a background with a long Japanese name is kept; the name comes in X-PS-Name, never in the address', async () => {
+  const s = await setup();
+  try {
+    const name = `${'現場の写真'.repeat(30)}.png`;
+    let r = await s.call('POST', '/physical-sandbox/scene/background', undefined, { raw: PNG, headers: { 'X-PS-Name': encodeURIComponent(name) } });
+    assert.equal(r.status, 200, r.text);
+    assert.ok(r.json.background.name.startsWith('現場の写真'));
+    assert.deepEqual(readdirSync(join(s.userDir, 'physical-sandbox', 'backgrounds')), [r.json.background.name]);
+    r = await s.call('POST', '/physical-sandbox/scene/background?name=other.png', undefined, { raw: PNG });
+    assert.equal(r.json.background.name, 'background', 'an address is not read for the name');
+    r = await s.call('POST', '/physical-sandbox/scene/background', undefined, { raw: PNG, headers: { 'X-PS-Name': '%E0%A4%A' } });
+    assert.equal(r.json.background.name, 'background', 'a name that is not URI-encoded text');
+  } finally { await s.close(); }
+});
+
+test('placing a robot that is nowhere is refused 404 in Japanese and places nothing', async () => {
+  const s = await setup();
+  try {
+    for (const product of ['nothing', 'ada/nothing:1']) {
+      const r = await s.call('POST', '/physical-sandbox/scene/place', { product, xyz: [0, 0] });
+      assert.equal(r.status, 404, product);
+      assert.equal(r.json.error, WORDS.noProduct);
+    }
+    assert.deepEqual(s.hub.scene().devices, []);
+  } finally { await s.close(); }
+});
+
+test('a full stream says so in the status; later states still reach the panes', () => {
+  assert.equal(PANE_STREAM_MAX, STREAM_MAX, 'the pane says the hub\'s number');
+  assert.equal(fullLine({ full: true }), `記録できる上限（${STREAM_MAX} 件）に達しました。これより後の動きは表示されますが、記録されません`);
+  assert.equal(fullLine({ full: false }), null);
 });

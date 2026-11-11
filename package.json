@@ -33,6 +33,8 @@
   },
   "scripts": {
     "build": "node tools/build.mjs",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build",
     "typecheck": "tsc --noEmit",
     "pretest": "npm run build && npm run typecheck",
     "test": "node --import tsx --test \"tests/**/*.test.{ts,js}\"",
@@ -48,10 +50,8 @@
     "node-red": "4.1.17",
     "node-red-5": "npm:node-red@5.0.9",
     "node-red-node-test-helper": "0.3.6",
+    "three": "0.180.0",
     "tsx": "4.23.15",
     "typescript": "5.9.3"
-  },
-  "dependencies": {
-    "three": "0.180.0"
   }
 }

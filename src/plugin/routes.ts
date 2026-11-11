@@ -7,7 +7,8 @@
  * JSON bodies: Node-RED's admin app already reads `application/json` up to its `apiMaxLength`
  * (5 MB by default) before these routes; a bigger body (a long record to play) is sent with another
  * content type (`text/plain`) and read here, up to 20 MB. The background picture comes as the raw
- * file (`application/octet-stream`, `?name=`), up to 50 MB, and never leaves this machine. A body
+ * file (`application/octet-stream`, its name URI-encoded in `X-PS-Name`), up to 50 MB, and never
+ * leaves this machine. A body
  * over its limit is answered 413 at once and the connection is closed: the rest is not read.
  *
  * Every POST comes from the pane: `application/json`, or the header `X-PS-Pane: 1` (a text body,
@@ -169,12 +170,27 @@ export function mediaKind(bytes: Buffer): { kind: 'still' | 'video'; type: strin
   return null;
 }
 
-/** A file name to keep the background under: the last part of what was given, without control characters or leading dots. */
+/** A file name's most bytes in UTF-8: file systems allow 255, and Japanese takes 3 a character. */
+export const NAME_MAX_BYTES = 200;
+
+/**
+ * A file name to keep the background under: the last part of what was given, without control
+ * characters or leading dots, at most 100 characters and NAME_MAX_BYTES bytes (whole characters).
+ */
 export function safeName(given: unknown): string {
   const last = String(typeof given === 'string' ? given : '').split(/[\\/]/).pop() ?? '';
   // eslint-disable-next-line no-control-regex
-  const clean = [...last.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\.{2,}/g, '.').replace(/^\.+/, '').trim()].slice(0, 100).join('');
+  const chars = [...last.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\.{2,}/g, '.').replace(/^\.+/, '').trim()].slice(0, 100);
+  while (Buffer.byteLength(chars.join('')) > NAME_MAX_BYTES) chars.pop();
+  const clean = chars.join('').trim();
   return clean || 'background';
+}
+
+/** The name in `X-PS-Name` (URI-encoded), or '' when there is none or it is not encoded text. */
+function headerName(req: any): string {
+  const raw = req.headers?.['x-ps-name'];
+  if (typeof raw !== 'string') return '';
+  try { return decodeURIComponent(raw); } catch { return ''; }
 }
 
 /** [length, width, height] from a bundle's `dimensions` (an array or {length,width,height}/{x,y,z}), as PS.com's catalog reads it. */
@@ -303,7 +319,7 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
     if (!bytes) { refuseTooLarge(req, res, WORDS.backgroundTooLarge); return; }
     const media = mediaKind(bytes);
     if (!media) throw new Answer(415, WORDS.notPicture, 'not-picture');
-    const name = safeName(req.query?.name);
+    const name = safeName(headerName(req));
     mkdirSync(hub.dirs.backgrounds, { recursive: true });
     const tmp = join(hub.dirs.backgrounds, `.${process.pid}.upload`);
     writeFileSync(tmp, bytes);
@@ -380,13 +396,16 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
     const turn = finite(yaw) ? yaw : 0;
 
     // An object of the catalog is an item: a box of its own size (bundle.json's dimensions), else
-    // 0.2 m. Asked before the scene is read: from reading it to setScene nothing may wait, or two
-    // places at once (or a record opened meanwhile) would write over each other
+    // 0.2 m; a robot found nowhere is refused. Asked before the scene is read: from reading it to
+    // setScene nothing may wait, or two places at once (or a record opened meanwhile) would write
+    // over each other
     const moving = id !== undefined && hub.scene().devices.some((d) => d.id === id);
     let kind = listedKinds.get(product);
     let bundle: Json | null = null;
     if (!moving && kind !== 'machine') {
       try { bundle = await bundleJsonOf(product); } catch { bundle = null; }
+      // A robot the listing did not have and that resolves nowhere could never be drawn
+      if (!bundle && kind === undefined) throw new Answer(404, WORDS.noProduct, 'no-product');
       kind ??= bundle?.kind === 'object' ? 'object' : 'machine';
     }
 
