@@ -5,7 +5,8 @@
  *   `<userDir>/physical-sandbox/scene.json` and restored at start.
  * - The stream: every message that comes in (`push`, from `ps in`, a record being played or, later,
  *   the agent) is checked as PS.com's devices/state.js checks a broker's (rubbish until it proves
- *   otherwise, an older `at` never wins) and sent to every pane. The stream buffer, what a save
+ *   otherwise, an older `at` never wins) and sent to every pane. A message for another site than
+ *   the scene's moves nothing, as in the pane: it is not sent, counted, kept or saved. The stream buffer, what a save
  *   turns into a record, is the opened record's states on the record's own time (loaded when it is
  *   opened) and the live (`mqtt`) and `agent` states on their own `at`; a live state for a device
  *   takes the place of that device's loaded states. What a play sends (`record`) is never kept: the
@@ -51,6 +52,8 @@ export interface Status {
   recorded: number;
   /** The opened record, without its content; `own` says whether it can be saved over. */
   opened: { ref: string; version: string; own: boolean } | { file: string } | null;
+  /** The plugin's site (its settings): 「現地をもとに戻す」 goes back to it. */
+  defaultSite: string;
 }
 
 export interface HubOptions {
@@ -74,6 +77,12 @@ export interface Hub {
   scene(): Scene;
   /** Change some of the scene's fields; kept on disk and sent to the panes. */
   setScene(patch: Partial<Scene>): Scene;
+  /**
+   * Take another site's messages from now on (the plugin's site when none is given). The stream is
+   * emptied: what it holds is of the other site, which this scene no longer takes. The opened
+   * record stays open.
+   */
+  setSite(site?: string): Scene;
   /**
    * One message into the stream; false (and nothing else happens) when it is not one or is older.
    * A `retained` one (the broker's last message, given again on subscribing) moves the panes and
@@ -302,6 +311,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     const message = validMessage(raw);
     if (!message) return false;
     const topic = parseTopic(message.topic)!;
+    if (topic.site !== scene.site) return false;
     if (topic.kind === 'state') {
       if (from === 'record' && fromOutside) notePlayed(message);
       const echo = from === 'mqtt' && isEcho(message);
@@ -446,6 +456,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
       agentFrames,
       recorded: recordedCount(),
       opened: !opened ? null : 'ref' in opened ? { ref: opened.ref, version: opened.version, own: opened.own } : { file: opened.file },
+      defaultSite: settings.site,
     };
   }
 
@@ -523,6 +534,16 @@ export function createHub(RED: any, opts: HubOptions): Hub {
       const next: Json = { ...scene, ...patch };
       if ('streamNames' in patch && patch.streamNames === undefined) delete next.streamNames;
       return replaceScene(next);
+    },
+    setSite: (site) => {
+      const next = site ?? settings.site;
+      if (next === scene.site) return plain(scene);
+      stopRun();
+      emptyStream();
+      const shown = replaceScene({ ...scene, site: next });
+      tick();
+      publishStatus();
+      return shown;
     },
     push,
     play,

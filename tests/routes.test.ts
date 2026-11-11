@@ -8,6 +8,7 @@ import http from 'node:http';
 import { createHub } from '../src/plugin/hub.js';
 import { registerRoutes, safeName, WORDS } from '../src/plugin/routes.js';
 import { WORDS as PANE_WORDS } from '../src/pane/words.js';
+import { exportedText, savedText } from '../src/pane/records-ui.js';
 import { readSettings } from '../src/plugin/settings.js';
 import { pending } from '../src/core/unsent.js';
 import { intrinsicsFromFov, extrinsicsFromPose, projectPoint } from '../src/pscom/camera-model.js';
@@ -85,6 +86,7 @@ test('reads ask for flows.read and everything that changes something for flows.w
       ['GET', '/physical-sandbox/bundles/resolve', 'flows.read'],
       ['GET', '/physical-sandbox/bundles/local/0/x/bundle.json', 'flows.read'],
       ['POST', '/physical-sandbox/scene/background', 'flows.write'],
+      ['POST', '/physical-sandbox/scene/site', 'flows.write'],
       ['POST', '/physical-sandbox/scene/floor', 'flows.write'],
       ['POST', '/physical-sandbox/scene/place', 'flows.write'],
       ['POST', '/physical-sandbox/scene/remove', 'flows.write'],
@@ -989,4 +991,45 @@ test('a record saved from the pane opens again on its floor with the camera kept
     assert.deepEqual(s.hub.scene().camera, camera, 'the same floor, to the millimetre: the camera still fits');
     assert.equal(s.hub.floorIsKnown(), true);
   } finally { await s.close(); await fake.stop(); }
+});
+
+test('scene/site changes the site or takes it back to the plugin\'s; the stream of the other site is emptied', async () => {
+  const s = await setup();
+  try {
+    await s.call('POST', '/physical-sandbox/stream/play', { record: { ...walkRecord, equipment: { ...walkRecord.equipment, site: { id: 'yard' } } }, file: 'yard.json' });
+    assert.equal(s.hub.scene().site, 'yard', 'opening a record takes its site');
+    assert.equal(s.hub.push({ topic: 'ps/local/arm/state', payload: { at: 1, joints: { j: 1 } } }, 'mqtt'), false, 'the plugin\'s site moves nothing now');
+
+    let r = await s.call('POST', '/physical-sandbox/scene/site', {});
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.site, 'local');
+    assert.equal(s.hub.scene().site, 'local');
+    assert.equal(s.red.retained('ps-pane/scene').site, 'local');
+    assert.equal(s.hub.status().recorded, 0, 'the yard\'s states are gone from the stream');
+    assert.deepEqual(s.red.retained('ps-pane/status').opened, { file: 'yard.json' }, 'the record stays open');
+    assert.equal(s.hub.push({ topic: 'ps/local/arm/state', payload: { at: 1, joints: { j: 1 } } }, 'mqtt'), true);
+
+    r = await s.call('POST', '/physical-sandbox/scene/site', { site: 'dock' });
+    assert.equal(s.hub.scene().site, 'dock');
+    r = await s.call('POST', '/physical-sandbox/scene/site', { site: 'a/b' });
+    assert.equal(r.status, 400);
+    assert.equal(r.json.error, WORDS.badSite);
+    assert.equal(s.hub.scene().site, 'dock');
+  } finally { await s.close(); }
+});
+
+test('record/save answers the names no robot answers to, and the pane says them once in Japanese', async () => {
+  const s = await setup();
+  try {
+    await s.call('POST', '/physical-sandbox/stream/play', { record: walkRecord, file: 'walk.record.json' });
+    s.hub.push({ topic: 'ps/local/ghost/state', payload: { at: 1, joints: { j: 1 } } }, 'mqtt');
+    s.hub.push({ topic: 'ps/local/ghost/state', payload: { at: 2, joints: { j: 2 } } }, 'mqtt');
+    const r = await s.call('POST', '/physical-sandbox/record/save', { mode: 'new', name: 'walk' });
+    assert.deepEqual([r.json.saved, r.json.skipped], [false, ['ghost']], r.text);
+    assert.equal(savedText(r.json), 'PS.com に保存できなかったため、このパソコンに残しました（PS.com にログインすると送れます） ghost はどのロボットの名前でもないため、記録に入れませんでした');
+    assert.equal(savedText({ saved: true, ref: 'ada/walk', version: '2', unchanged: false, skipped: [] }), '保存しました: ada/walk（バージョン 2）');
+    const exported = await s.call('POST', '/physical-sandbox/record/export', { name: 'walk' });
+    assert.deepEqual(exported.json.skipped, ['ghost']);
+    assert.match(exportedText(exported.json), /^エクスポートしました: .*walk\.record\.json ghost はどのロボットの名前でもないため、記録に入れませんでした$/);
+  } finally { await s.close(); }
 });

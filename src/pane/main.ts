@@ -209,6 +209,7 @@ const handlers: PaneHandlers = {
     scene = next as PaneScene;
     const shown = scene;
     floor.setKnownEdges(shown.floor?.edgesM ?? null);
+    records.setSite(shown.site);
     void showBackground(shown.background ?? null);
     place.setScene(shown, stage.missing());
     const ids = JSON.stringify(shown.devices.map((d) => d.id));

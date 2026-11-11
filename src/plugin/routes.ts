@@ -65,6 +65,7 @@ export const WORDS = {
   noPane: '画面はまだ用意されていません',
   notPane: 'Physical Sandbox の画面から操作してください',
   busy: '保存中です。終わるまでお待ちください',
+  badSite: '現地の名前が正しくありません（英数字など 1〜80 文字で、/ + # は使えません）',
 };
 
 /** A catalog name (pscom-client.ts NAME). */
@@ -317,6 +318,14 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
     try { readSync(fd, head, 0, 16, 0); } finally { closeSync(fd); }
     res.type(mediaKind(head)?.type ?? 'application/octet-stream');
     res.sendFile(file, { dotfiles: 'allow', headers: { 'Cache-Control': 'no-store' } });
+  }));
+
+  // The site whose messages the scene takes: `{site}`, or the plugin's own with none (「現地をもとに戻す」)
+  app.post(`${P}/scene/site`, write, jsonBody, handle((req, res) => {
+    const { site } = req.body;
+    if (site !== undefined && site !== null && !isTopicName(site)) throw new Answer(400, WORDS.badSite, 'bad-site');
+    const scene = hub.setSite(typeof site === 'string' ? site : undefined);
+    res.json({ site: scene.site, status: hub.status() });
   }));
 
   app.post(`${P}/scene/floor`, write, jsonBody, handle((req, res) => {
@@ -584,7 +593,7 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
     const { name, title } = req.body;
     const stem = typeof name === 'string' && NAME.test(name) ? name : 'record';
     const words = typeof title === 'string' && title.trim() ? title.trim() : undefined;
-    const { record } = recordToSave(hub.openedRecord(), words, false);
+    const { record, skipped } = recordToSave(hub.openedRecord(), words, false);
     mkdirSync(hub.dirs.exports, { recursive: true });
     const text = JSON.stringify(record, null, 1) + '\n';
     for (let k = 1; k < 1000; k += 1) {
@@ -596,7 +605,7 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
         if ((e as NodeJS.ErrnoException).code === 'EEXIST') continue;
         throw e;
       }
-      res.json({ file, name: fileName });
+      res.json({ file, name: fileName, skipped });
       return;
     }
     throw new Error('no free export name');

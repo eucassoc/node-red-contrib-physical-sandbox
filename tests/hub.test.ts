@@ -38,7 +38,7 @@ test('a new hub has an empty scene on the configured site and tells the panes at
   assert.deepEqual(red.retained('ps-pane/scene'), hub.scene());
   assert.deepEqual(red.retained('ps-pane/snapshot'), []);
   assert.deepEqual(red.retained('ps-pane/status'), {
-    login: { signedIn: false, handle: null }, unsent: [], playing: null, agentFrames: false, recorded: 0, opened: null,
+    login: { signedIn: false, handle: null }, unsent: [], playing: null, agentFrames: false, recorded: 0, opened: null, defaultSite: 'yard',
   });
 });
 
@@ -308,4 +308,18 @@ test('a scene\'s background name with a path separator or .. is not taken', () =
     assert.equal(normalizeScene({ background: { kind: 'still', name } }, 'local').background, null, name);
   }
   assert.deepEqual(normalizeScene({ background: { kind: 'still', name: 'site photo.png' } }, 'local').background, { kind: 'still', name: 'site photo.png' });
+});
+
+test('a message for another site than the scene\'s moves nothing: not sent, not counted, not kept, not in the snapshot', () => {
+  const { red, hub, clock } = setup(tmp(), { site: 'yard' });
+  for (const kind of ['state', 'command', 'event']) {
+    assert.equal(hub.push({ topic: `ps/local/arm/${kind}`, payload: { at: 1, joints: { j: 1 } } }, 'mqtt'), false, kind);
+  }
+  clock.advance(SNAPSHOT_MS);
+  assert.deepEqual(states(red.published), []);
+  assert.deepEqual(hub.streamBuffer(), []);
+  assert.equal(hub.status().recorded, 0);
+  assert.deepEqual(red.retained('ps-pane/snapshot'), []);
+  assert.equal(hub.push({ topic: 'ps/yard/arm/state', payload: { at: 1, joints: { j: 1 } } }, 'mqtt'), true);
+  assert.equal(hub.status().defaultSite, 'yard', 'the status says the plugin\'s site');
 });

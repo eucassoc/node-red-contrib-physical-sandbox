@@ -1,7 +1,7 @@
 // What the records part of the pane shows (src/pane/records-ui.ts) and the robots lists (src/pane/place-ui.ts).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { myRecordRows, NAME, openedLine, playAgainBody, playingLine, recordingLine, saveButtons, unsentLines } from '../../src/pane/records-ui.js';
+import { myRecordRows, NAME, openedLine, playAgainBody, playingLine, recordingLine, saveButtons, siteResetOffered, unsentLines } from '../../src/pane/records-ui.js';
 import { machineRows, placedRows, placeRequest } from '../../src/pane/place-ui.js';
 import { ja } from '../../src/pane/words.js';
 
@@ -70,4 +70,12 @@ test('the person\'s own PS.com records: each row opens its ref; signed out, offl
   assert.deepEqual(myRecordRows({ rows: [], signedIn: false }), { rows: [], note: ja('myRecordsSignedOut') });
   assert.deepEqual(myRecordRows({ rows: [], offline: true }), { rows: [], note: ja('myRecordsOffline') });
   assert.deepEqual(myRecordRows(null), { rows: [], note: ja('myRecordsOffline') });
+});
+
+test('「現地をもとに戻す」 is offered only when the scene\'s site is not the plugin\'s', () => {
+  assert.equal(siteResetOffered('yard', { defaultSite: 'local' }), true);
+  assert.equal(siteResetOffered('local', { defaultSite: 'local' }), false);
+  assert.equal(siteResetOffered(null, { defaultSite: 'local' }), false);
+  assert.equal(siteResetOffered('yard', null), false);
+  assert.equal(ja('site', { site: 'yard' }), '現地: yard');
 });

@@ -56,6 +56,11 @@ export const WORDS = {
   openedRef: { ja: '開いている記録: {ref}（バージョン {version}）', en: 'Open: {ref} (version {version})' },
   openedFile: { ja: '開いている記録: {file}', en: 'Open: {file}' },
   openedNone: { ja: '記録は開いていません', en: 'No record is open' },
+  site: { ja: '現地: {site}', en: 'Site: {site}' },
+  siteHint: { ja: 'この現地（ps/{site}/…）のメッセージだけを表示し、記録します', en: 'Only messages of this site (ps/{site}/…) are shown and recorded' },
+  siteReset: { ja: '現地をもとに戻す', en: 'Back to the plugin\'s site' },
+  siteResetTitle: { ja: 'プラグインの設定の現地（{site}）に戻します。流れている動きの記録は空になります', en: 'Back to the site of the plugin\'s settings ({site}). The recording is cleared' },
+  siteChanged: { ja: '現地を {site} にしました', en: 'The site is now {site}' },
 
   // the stream and saving
   records: { ja: '記録', en: 'Record' },
@@ -71,11 +76,15 @@ export const WORDS = {
   saved: { ja: '保存しました: {ref}（バージョン {version}）', en: 'Saved: {ref} (version {version})' },
   savedUnchanged: { ja: '変更はありません: {ref}（バージョン {version}）', en: 'Nothing changed: {ref} (version {version})' },
   savedKept: { ja: 'PS.com に保存できなかったため、このパソコンに残しました（{reason}）', en: 'Could not be saved to PS.com, kept on this computer ({reason})' },
+  skipped: { ja: '{names} はどのロボットの名前でもないため、記録に入れませんでした', en: '{names} name no placed robot and were left out of the record' },
+  recordingFull: { ja: '記録できる上限（{n} 件）に達しました。これより後の動きは表示されますが、記録されません', en: 'The recording is full ({n}): later states are shown but not recorded' },
   exportRecord: { ja: 'エクスポート', en: 'Export' },
   exported: { ja: 'エクスポートしました: {file}', en: 'Exported: {file}' },
   unsent: { ja: 'PS.com 未保存: {name}', en: 'Not on PS.com: {name}' },
   resend: { ja: '再送信する', en: 'Send again' },
   resent: { ja: '{n} 件を送信しました', en: '{n} sent' },
+  removeUnsentAsk: { ja: '{name} をこのパソコンから取り除きます。PS.com には保存されていません。よろしいですか', en: 'Remove {name} from this computer? It is not on PS.com' },
+  removedUnsent: { ja: '{name} を取り除きました', en: '{name} was removed' },
 
   // signing in and the agent
   account: { ja: 'PS.com', en: 'PS.com' },
