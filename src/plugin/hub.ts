@@ -71,6 +71,8 @@ export interface Hub {
   readonly dirs: { root: string; unsent: string; backgrounds: string; exports: string };
   readonly client: PsComClient;
   readonly sender: Sender;
+  /** The clock the hub plays by; `ps play` plays by it too. */
+  readonly clock: Clock;
   scene(): Scene;
   /** Change some of the scene's fields; kept on disk and sent to the panes. */
   setScene(patch: Partial<Scene>): Scene;
@@ -502,6 +504,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     dirs,
     client,
     sender,
+    clock,
     scene: () => plain(scene),
     setScene: (patch) => {
       const next: Json = { ...scene, ...patch };

@@ -775,6 +775,11 @@ test('every sentence shown to people keeps the package\'s wording (no 直す・�
       for (const m of code.matchAll(/'[^'\n]*'|`[^`]*`/g)) if (japanese.test(m[0])) sentences.push([`${dir}/${file}`, m[0]]);
     }
   }
+  // and every Japanese line of the nodes' editor templates and help
+  const nodesDir = join(import.meta.dirname, '..', 'src/nodes');
+  for (const file of readdirSync(nodesDir).filter((f) => f.endsWith('.html'))) {
+    for (const line of readFileSync(join(nodesDir, file), 'utf8').split('\n')) if (japanese.test(line)) sentences.push([`src/nodes/${file}`, line.trim()]);
+  }
   assert.ok(sentences.length > 30, `${sentences.length} sentences found`);
   for (const [where, sentence] of sentences) assert.doesNotMatch(sentence.replaceAll('読み込', ''), banned, `${where}: ${sentence}`);
 });
