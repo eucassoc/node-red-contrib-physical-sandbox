@@ -134,7 +134,8 @@ test('the agent sees both flow tools, with the shape of a proposal in the schema
     assert.deepEqual(schema.required, ['nodes']);
     assert.equal(schema.properties.nodes.type, 'array');
     assert.equal(schema.properties.nodes.maxItems, MAX_PROPOSED_NODES);
-    assert.deepEqual(schema.properties.nodes.items.required, ['type']);
+    assert.deepEqual(schema.properties.nodes.items.required, ['type', 'id']);
+    assert.match(schema.properties.nodes.description, /global-config/);
     assert.equal(schema.properties.newTab.type, 'boolean');
     assert.match(byName.ps_flow_propose.description ?? '', /Deploy/);
     assert.match(byName.ps_flow_propose.description ?? '', /never deploy/i);
@@ -214,6 +215,50 @@ test('ps_flow_propose: without newTab it goes into a new tab too; with newTab fa
   } finally { await client.close(); closeEditors(); }
 });
 
+test('ps_flow_propose: a proposal that brings its own tab is shown in that tab, and the answer names it', async () => {
+  const before = await runningFlows();
+  const editor = openEditor({ nodeSet: deployed, workspace: 't1' });
+  const client = await mcp();
+  try {
+    const nodes = [
+      { id: 't1', type: 'tab', label: 'Dance' }, // the same id as the person's tab
+      { id: 'a', type: 'inject', z: 't1', name: 'go', wires: [['b']] },
+      { id: 'b', type: 'ps play', z: 't1', name: 'dance', wires: [[]] },
+    ];
+    const result = json(await call(client, 'ps_flow_propose', { nodes }));
+    const now = editor.nodes();
+    const tab = now.find((n) => n.type === 'tab' && n.label === 'Dance');
+    assert.ok(tab && tab.id !== 't1', 'the tab got a new id');
+    assert.equal(result.tab, tab.id, 'the answer names the proposal\'s tab, not the person\'s');
+    assert.deepEqual(editor.shown, [tab.id], 'and the editor shows it');
+    assert.deepEqual(now.filter((n) => n.z === tab.id).map((n) => n.name), ['go', 'dance']);
+    assert.deepEqual(now.find((n) => n.id === 't1'), deployed[0], 'the person\'s tab is as it was');
+    assert.deepEqual(await runningFlows(), before);
+  } finally { await client.close(); closeEditors(); }
+});
+
+test('ps_flow_propose: credentials are taken out before the editor is asked, and the answer says so', async () => {
+  const editor = openEditor({ nodeSet: deployed });
+  const client = await mcp();
+  try {
+    const nodes = [
+      { id: 'b', type: 'mqtt-broker', broker: '127.0.0.1', credentials: { user: 'u', password: 'secret' } },
+      { id: 'o', type: 'mqtt out', broker: 'b', topic: 'x' },
+    ];
+    const result = json(await call(client, 'ps_flow_propose', { nodes }));
+    assert.deepEqual(editor.imports[0].nodes, [{ id: 'b', type: 'mqtt-broker', broker: '127.0.0.1' }, { id: 'o', type: 'mqtt out', broker: 'b', topic: 'x' }]);
+    assert.ok(!JSON.stringify(editor.posted).includes('secret'));
+    assert.equal(result.credentialsRemoved, true);
+    assert.ok(result.next.includes(FLOW_WORDS.credentialsRemoved));
+    assert.match(FLOW_WORDS.credentialsRemoved, /資格情報/);
+    assert.match(FLOW_WORDS.credentialsRemoved, /credentials/);
+    // none sent: nothing said
+    const plain = json(await call(client, 'ps_flow_propose', { nodes: [{ id: 'd', type: 'debug' }] }));
+    assert.equal('credentialsRemoved' in plain, false);
+    assert.ok(!plain.next.includes(FLOW_WORDS.credentialsRemoved));
+  } finally { await client.close(); closeEditors(); }
+});
+
 test('ps_flow_propose: types this Node-RED does not have are imported all the same and named in the answer', async () => {
   const editor = openEditor({ nodeSet: deployed, knownTypes: ['inject', 'debug', 'ps play'] });
   const client = await mcp();
@@ -243,6 +288,13 @@ test('ps_flow_propose refuses what is not a set of nodes, with a clear message, 
       [[{ id: 'a' }], FLOW_WORDS.noType(0)],
       [[{ id: 'a', type: '' }], FLOW_WORDS.noType(0)],
       [[{ id: 'a', type: 7 }], FLOW_WORDS.noType(0)],
+      // Node-RED keeps only the first node of an id: nodes without one, or with the same one, would be lost
+      [[{ id: 'a', type: 'inject' }, { type: 'debug' }], FLOW_WORDS.noId(1)],
+      [[{ id: '', type: 'debug' }], FLOW_WORDS.noId(0)],
+      [[{ id: 5, type: 'debug' }], FLOW_WORDS.noId(0)],
+      [[{ id: 'a', type: 'inject' }, { id: 'b', type: 'debug' }, { id: 'a', type: 'debug' }], FLOW_WORDS.sameId(2, 0)],
+      // a global-config node merges into, and can replace, the person's global environment variables
+      [[{ id: 'a', type: 'inject' }, { id: 'g', type: 'global-config', env: [{ name: 'KEY', value: 'x', type: 'str' }] }], FLOW_WORDS.globalConfig(1)],
       [Array.from({ length: MAX_PROPOSED_NODES + 1 }, (_, i) => ({ id: `x${i}`, type: 'debug' })), FLOW_WORDS.tooMany],
     ];
     for (const [nodes, words] of cases) {
@@ -252,6 +304,8 @@ test('ps_flow_propose refuses what is not a set of nodes, with a clear message, 
       assert.match(words, /[぀-ヿ]/, 'in Japanese');
       assert.match(words, / \/ [A-Za-z]/, 'and English');
     }
+    assert.match(FLOW_WORDS.sameId(2, 0), /nodes\[2\]/);
+    assert.match(FLOW_WORDS.sameId(2, 0), /nodes\[0\]/);
     assert.deepEqual(editor.posted, [], 'no editor was asked');
     assert.deepEqual(editor.imports, []);
     // 2000 nodes are taken

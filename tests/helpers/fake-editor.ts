@@ -10,9 +10,12 @@
  *   from another realm). `importNodes` works as Node-RED's does on the points that matter here:
  *   with `generateIds` each node gets a new id (its wires and tab follow), without it an id that is
  *   already there is refused (`import_conflict`); with `addFlow` the nodes without a tab go into a
- *   new tab, which becomes the active one; it answers `{nodeMap}` with each new node (not tabs)
- *   under its old id and under its new one, as Node-RED's does. As with Node-RED's touch import, it
- *   does not mark the workspace changed: `dirtyCalls` notes `RED.nodes.dirty(value)`.
+ *   new tab, which becomes the active one (a tab the proposal brings itself is added but not shown,
+ *   as in Node-RED); it answers `{nodeMap}` with each new node (not tabs) under its old id and under
+ *   its new one, as Node-RED's does. As with Node-RED's touch import, it does not mark the workspace
+ *   changed: `RED.nodes.dirty(value)` sets it (noted in `dirtyCalls`), `dirty()` tells it.
+ * - `RED.workspaces.show(id)` makes that tab the active one (noted in `shown`); `workspace` is the
+ *   tab open at the start.
  * - `RED.nodes.getType` knows every type, or only `knownTypes` when given.
  * - `$.ajax` notes each body sent and answers with `post(body, settings)` (by default `{}`); a test
  *   wires it to the plugin's route with `fetch`, sending `settings` as they are.
@@ -46,6 +49,9 @@ export interface FakeEditor {
   imports: { nodes: any[]; options: any }[];
   notes: { text: string; type: unknown }[];
   dirtyCalls: unknown[];
+  shown: string[];
+  /** The fake RED the script runs against. */
+  red: any;
   /** The workspace now: the starting node set and what was imported. */
   nodes(): any[];
 }
@@ -69,6 +75,8 @@ export function fakeEditor(o: {
     imports: [],
     notes: [],
     dirtyCalls: [],
+    shown: [],
+    red: null,
     nodes: () => plain(workspace),
     deliver(topic, data) {
       for (const s of subscriptions) {
@@ -78,6 +86,7 @@ export function fakeEditor(o: {
     },
   };
   let nextId = 1;
+  let dirty = false;
   function importInto(given: any[], options: { generateIds?: boolean; addFlow?: boolean }) {
     const nodes: any[] = plain(given);
     if (!options.generateIds && nodes.some((n) => workspace.some((w) => w.id === n.id))) {
@@ -90,15 +99,15 @@ export function fakeEditor(o: {
       tab = `new-tab-${nextId++}`;
       workspace.push({ id: tab, type: 'tab', label: `Flow ${nextId}` });
     }
-    const nodeMap: Record<string, { id: string }> = {};
+    const nodeMap: Record<string, { id: string; z?: string }> = {};
     for (const n of nodes) {
       const node = { ...n, id: renamed(n.id) };
       if (n.type !== 'tab') node.z = n.z ? renamed(n.z) : (tab ?? active);
       if (Array.isArray(n.wires)) node.wires = n.wires.map((port: unknown) => (Array.isArray(port) ? port.map((w) => renamed(String(w))) : port));
       workspace.push(node);
-      if (n.type !== 'tab') nodeMap[n.id] = nodeMap[node.id] = { id: node.id };
+      if (n.type !== 'tab') nodeMap[n.id] = nodeMap[node.id] = { ...node };
     }
-    if (tab && !o.workspace) active = tab;
+    if (tab) active = tab;
     return { nodeMap };
   }
   const RED = {
@@ -108,7 +117,12 @@ export function fakeEditor(o: {
         editor.nodeSetCalls.push(plain(opts));
         return plain(workspace);
       },
-      dirty(value?: unknown) { editor.dirtyCalls.push(plain(value)); return value === undefined ? editor.dirtyCalls.length > 0 : undefined; },
+      dirty(value?: unknown) {
+        if (value === undefined) return dirty;
+        editor.dirtyCalls.push(plain(value));
+        dirty = Boolean(value);
+        return undefined;
+      },
       getType: (type: string) => (o.knownTypes === undefined || o.knownTypes.includes(type) ? { category: 'common' } : undefined),
     },
     view: {
@@ -119,8 +133,12 @@ export function fakeEditor(o: {
       },
     },
     notify(text: string, type: unknown) { editor.notes.push({ text, type: plain(type) }); },
-    workspaces: { active: () => active },
+    workspaces: {
+      active: () => active,
+      show(id: string) { editor.shown.push(id); active = id; },
+    },
   };
+  editor.red = RED;
   const $ = {
     ajax(settings: AjaxSettings) {
       const body = JSON.parse(settings.data);

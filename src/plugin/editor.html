@@ -108,8 +108,19 @@
     function importProposal(args) {
       var nodes = args && Array.isArray(args.nodes) ? args.nodes : [];
       var missing = notInstalled(nodes);
+      // the ids before the import (Node-RED gives a tab or subflow of the proposal its new id in place)
+      var ids = [];
+      for (var n = 0; n < nodes.length; n++) ids.push(nodes[n] && nodes[n].id);
       var result = RED.view.importNodes(nodes, { addFlow: Boolean(args && args.newTab), generateIds: true, touchImport: true, notify: true });
       if (!result || !result.nodeMap) throw new Error(NOT_IMPORTED);
+      // The tab the proposal went into: its own tab is added but not shown by Node-RED (only a tab
+      // the import makes itself is), so it is shown here, and named in the answer
+      var tab = null;
+      for (var i = 0; i < ids.length && !tab; i++) {
+        var made = result.nodeMap[ids[i]];
+        if (made && made.z) tab = made.z;
+      }
+      if (tab) RED.workspaces.show(tab); else tab = RED.workspaces.active();
       // A touch import leaves the nodes in place with no drag to end it, and only the end of a drag
       // marks the workspace changed: marked here, so Deploy turns active
       RED.nodes.dirty(true);
@@ -119,7 +130,7 @@
       for (var key in result.nodeMap) {
         if (Object.prototype.hasOwnProperty.call(result.nodeMap, key) && result.nodeMap[key]) imported[result.nodeMap[key].id] = true;
       }
-      return { imported: Object.keys(imported).length, tab: RED.workspaces.active(), notInstalled: missing };
+      return { imported: Object.keys(imported).length, tab: tab, notInstalled: missing };
     }
 
     RED.comms.subscribe('ps-editor/cancel', function (topic, data) {

@@ -24,18 +24,23 @@ test('flows: the complete node set without credentials, posted as text with X-PS
 
 test('propose: a claim first; once granted, importNodes with the exact options, the notice, and the answer with the ticket', async () => {
   const editor = fakeEditor({
-    workspace: 'new-tab',
+    workspace: 'tab1',
     post: async (body) => (body.claim ? { granted: true, ticket: 'T1' } : { taken: true }),
   });
   const nodes = [{ id: 'a', type: 'inject', wires: [['b']] }, { id: 'b', type: 'ps play' }];
+  assert.equal(editor.red.nodes.dirty(), false);
   editor.deliver('ps-editor/request', { id: 'r2', op: 'propose', args: { nodes, newTab: true } });
   await settle();
+  assert.equal(editor.red.nodes.dirty(), true, 'changed: Deploy turns active');
   assert.deepEqual(editor.imports, [{ nodes, options: { addFlow: true, generateIds: true, touchImport: true, notify: true } }]);
   assert.deepEqual(editor.notes, [{ text: PROPOSED, type: 'compact' }]);
   assert.deepEqual(editor.dirtyCalls, [true], 'the workspace is marked changed, so Deploy turns active');
+  const newTab = editor.nodes().find((n) => n.name === undefined && n.type === 'inject')?.z;
+  assert.ok(newTab && newTab !== 'tab1', 'a new tab');
+  assert.deepEqual(editor.shown, [newTab]);
   assert.deepEqual(editor.posted, [
     { id: 'r2', claim: true },
-    { id: 'r2', ok: true, result: { imported: 2, tab: 'new-tab', notInstalled: [] }, ticket: 'T1' },
+    { id: 'r2', ok: true, result: { imported: 2, tab: newTab, notInstalled: [] }, ticket: 'T1' },
   ]);
   // without newTab it goes into the open tab
   editor.deliver('ps-editor/request', { id: 'r3', op: 'propose', args: { nodes: [{ id: 'c', type: 'debug' }] } });
@@ -53,6 +58,17 @@ test('propose: the types this editor does not have are listed in the answer (tab
   await settle();
   assert.equal(editor.imports.length, 1, 'imported all the same');
   assert.deepEqual(editor.posted.at(-1).result.notInstalled, ['ps play', 'mqtt out']);
+});
+
+test('propose: a proposal that brings its own tab is shown in that tab, and the answer names it', async () => {
+  const editor = fakeEditor({ workspace: 'tab1', post: async (body) => (body.claim ? { granted: true, ticket: 'T' } : {}) });
+  const nodes = [{ id: 'mytab', type: 'tab', label: 'Dance' }, { id: 'a', type: 'inject', z: 'mytab', wires: [['b']] }, { id: 'b', type: 'debug', z: 'mytab' }];
+  editor.deliver('ps-editor/request', { id: 'r7', op: 'propose', args: { nodes, newTab: true } });
+  await settle();
+  const tab = editor.nodes().find((n) => n.type === 'tab' && n.label === 'Dance');
+  assert.ok(tab && tab.id !== 'mytab', 'the tab got a new id');
+  assert.deepEqual(editor.shown, [tab.id]);
+  assert.deepEqual(editor.posted.at(-1).result, { imported: 2, tab: tab.id, notInstalled: [] });
 });
 
 test('propose: not granted, nothing is imported; an import that fails is answered as a refusal', async () => {
@@ -128,7 +144,8 @@ test('two editors open: a proposal lands in exactly one of them, and the agent i
     const imported = editors.filter((e) => e.imports.length > 0);
     assert.equal(imported.length, 1, 'exactly one editor imported');
     assert.equal(imported[0].imports.length, 1);
-    assert.deepEqual(answer, { imported: 2, tab: imported[0] === editors[0] ? 'tab-a' : 'tab-b', notInstalled: [] });
+    assert.deepEqual(answer, { imported: 2, tab: imported[0].nodes().find((n) => n.type === 'inject').z, notInstalled: [] });
+    assert.ok(!['tab-a', 'tab-b'].includes(answer.tab), 'a new tab');
     const other = editors.find((e) => e !== imported[0])!;
     assert.deepEqual(other.notes, []);
     // and flows: one answer is taken, the editors both may answer

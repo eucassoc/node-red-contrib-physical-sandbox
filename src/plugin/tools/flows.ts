@@ -22,6 +22,13 @@ export const FLOW_WORDS = {
   tooMany: `一度に提案できるノードは ${MAX_PROPOSED_NODES} 個までです / At most ${MAX_PROPOSED_NODES} nodes can be proposed at once`,
   notObject: (i: number) => `nodes[${i}] がノード（オブジェクト）ではありません / nodes[${i}] is not a node object`,
   noType: (i: number) => `nodes[${i}] に type（ノードの種類の文字列）を指定してください / nodes[${i}] has no type (the node type, a string)`,
+  noId: (i: number) => `nodes[${i}] に id（提案の中で重ならない文字列）を指定してください / nodes[${i}] has no id (a string, unique within the proposal)`,
+  sameId: (i: number, first: number) => `nodes[${i}] の id が nodes[${first}] と同じです。id は提案の中で重ならないようにしてください`
+    + ` / nodes[${i}] has the same id as nodes[${first}]: the ids must be unique within the proposal`,
+  globalConfig: (i: number) => `nodes[${i}] は global-config です。人のグローバル環境変数を置き換えてしまうため、提案には含められません`
+    + ` / nodes[${i}] is a global-config node, which would replace the person's global environment variables: it cannot be proposed`,
+  credentialsRemoved: '提案のノードの資格情報（credentials）は取り除きました。必要な資格情報は人がエディタで設定してください'
+    + ' / The credentials in the proposed nodes were removed: the person enters any that are needed in the editor',
   flowsRefused: 'エディタからフローを取得できませんでした / The editor could not give its flows',
   notImported: 'The editor could not import the proposal',
   proposed: 'エディタに提案を Deploy 前の変更として取り込みました。内容を確かめて Deploy してください。Deploy するまで動きません'
@@ -35,16 +42,38 @@ const failed = (message: string) => ({ content: [{ type: 'text' as const, text: 
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** Why a proposal cannot go to the editor, or null when it can. */
+/**
+ * Why a proposal cannot go to the editor, or null when it can. Node-RED's import keeps only the
+ * first node of an id, so every node needs an id of its own; a global-config node would merge into
+ * (and can replace) the person's global environment variables, which new ids do not prevent.
+ */
 export function proposalProblem(nodes: unknown): string | null {
   if (!Array.isArray(nodes)) return FLOW_WORDS.notArray;
   if (nodes.length === 0) return FLOW_WORDS.empty;
   if (nodes.length > MAX_PROPOSED_NODES) return FLOW_WORDS.tooMany;
+  const seen = new Map<string, number>();
   for (const [i, node] of nodes.entries()) {
     if (!isPlainObject(node)) return FLOW_WORDS.notObject(i);
     if (typeof node.type !== 'string' || node.type === '') return FLOW_WORDS.noType(i);
+    if (typeof node.id !== 'string' || node.id === '') return FLOW_WORDS.noId(i);
+    if (node.type === 'global-config') return FLOW_WORDS.globalConfig(i);
+    const first = seen.get(node.id);
+    if (first !== undefined) return FLOW_WORDS.sameId(i, first);
+    seen.set(node.id, i);
   }
   return null;
+}
+
+/** The nodes without their credentials, and whether any were there. */
+function withoutCredentials(nodes: Record<string, unknown>[]): { nodes: Record<string, unknown>[]; removed: boolean } {
+  let removed = false;
+  const kept = nodes.map((node) => {
+    if (!Object.hasOwn(node, 'credentials')) return node;
+    removed = true;
+    const { credentials: _dropped, ...rest } = node;
+    return rest;
+  });
+  return { nodes: kept, removed };
 }
 
 /** What a failed ask tells the agent. */
@@ -62,10 +91,11 @@ const NODES = z.any().optional().meta({
   type: 'array',
   minItems: 1,
   maxItems: MAX_PROPOSED_NODES,
-  items: { type: 'object', properties: { type: { type: 'string' }, id: { type: 'string' } }, required: ['type'] },
+  items: { type: 'object', properties: { type: { type: 'string' }, id: { type: 'string' } }, required: ['type', 'id'] },
   description: 'Node-RED nodes as in a flow export (the JSON of Export/Import): each with a type and an id unique within the proposal; '
     + 'wires and z refer to those ids. The editor gives every node a new id on import, so an id the person\'s flows already have is never overwritten. '
-    + 'A node of type "tab" with the other nodes\' z set to its id makes a named tab.',
+    + 'A node of type "tab" with the other nodes\' z set to its id makes a named tab. '
+    + 'Not allowed: global-config nodes (they would replace the person\'s global environment variables). Credentials are removed before import.',
 });
 
 export function registerFlowTools(server: McpServer, link: EditorLink | undefined): void {
@@ -95,16 +125,22 @@ export function registerFlowTools(server: McpServer, link: EditorLink | undefine
     const problem = proposalProblem(nodes);
     if (problem) return failed(problem);
     if (!link) return failed(FLOW_WORDS.noEditor);
+    const sent = withoutCredentials(nodes);
     let result: any;
     try {
-      result = await link.ask('propose', { nodes, newTab: newTab ?? true });
+      result = await link.ask('propose', { nodes: sent.nodes, newTab: newTab ?? true });
     } catch (e) {
       return askFailed(e, (why) => `${why} / ${FLOW_WORDS.notImported}`);
     }
     const answer: Record<string, unknown> = { imported: result?.imported, tab: result?.tab, deployed: false };
     const missing = Array.isArray(result?.notInstalled) ? result.notInstalled.filter((t: unknown) => typeof t === 'string') : [];
     if (missing.length > 0) answer.notInstalled = missing;
-    answer.next = missing.length > 0 ? `${FLOW_WORDS.proposed}\n${FLOW_WORDS.notInstalled(missing)}` : FLOW_WORDS.proposed;
+    if (sent.removed) answer.credentialsRemoved = true;
+    answer.next = [
+      FLOW_WORDS.proposed,
+      ...(missing.length > 0 ? [FLOW_WORDS.notInstalled(missing)] : []),
+      ...(sent.removed ? [FLOW_WORDS.credentialsRemoved] : []),
+    ].join('\n');
     return text(answer);
   });
 }
