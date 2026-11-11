@@ -24,8 +24,10 @@ nodes `ps in` and `ps play`. The plugin never deploys flows and never does anyth
 
 ## The pane
 
-Open the tab 「PS」 in the sidebar, or press 「別ウィンドウで開く」 (open in a separate window) to put it on
+Open the tab 「PS」 in the sidebar, or press 「Open in a window」 to put it on
 another screen. Both show the same scene and the same stream, so you can use either, or both at once.
+
+The screens follow Node-RED's language setting (Japanese or English); messages to the agent stay in both languages.
 
 - **Background.** Choose a photo or a video of the site. It stays in your browser and in
   `<userDir>/physical-sandbox/backgrounds/`; it is never sent to PS.com.
