@@ -1,0 +1,104 @@
+{
+ "schemaVersion": 3,
+ "siteFrameId": "lab-1",
+ "createdAt": "2026-11-11T05:00:37+00:00",
+ "device": "physical-sandbox",
+ "frame": {
+  "frameId": "site",
+  "up": "+Y",
+  "unit": "m"
+ },
+ "markers": [
+  {
+   "id": "1",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "id": "2",
+   "x": 1.0,
+   "y": 0.0,
+   "z": 0.0
+  }
+ ],
+ "equipment": {
+  "site": {
+   "id": "lab-1"
+  },
+  "devices": [
+   {
+    "id": "so101-1",
+    "product": "physical-sandbox/so101:1",
+    "owner": "external",
+    "parent": "site",
+    "pose": {
+     "xyz": [
+      0.5,
+      -0.25,
+      0.0
+     ],
+     "rpy": [
+      0.0,
+      0.0,
+      0.3
+     ]
+    },
+    "_source": "numpy"
+   }
+  ]
+ },
+ "names": {
+  "so101-1": "so101-1"
+ },
+ "traces": [
+  {
+   "deviceId": "so101-1",
+   "samples": [
+    {
+     "t": 0.0,
+     "joints": {
+      "shoulder_pan": 0.0,
+      "elbow_flex": 0.0
+     }
+    },
+    {
+     "t": 0.1,
+     "joints": {
+      "shoulder_pan": 0.1,
+      "elbow_flex": -0.05
+     }
+    },
+    {
+     "t": 0.2,
+     "joints": {
+      "shoulder_pan": 0.25,
+      "elbow_flex": -0.125
+     }
+    },
+    {
+     "t": 0.3,
+     "joints": {
+      "shoulder_pan": 0.4,
+      "elbow_flex": -0.2
+     }
+    },
+    {
+     "t": 0.4,
+     "joints": {
+      "shoulder_pan": 0.55,
+      "elbow_flex": -0.3
+     }
+    },
+    {
+     "t": 0.5,
+     "joints": {
+      "shoulder_pan": 0.7,
+      "elbow_flex": -0.35
+     }
+    }
+   ]
+  }
+ ],
+ "name": "two joints"
+}

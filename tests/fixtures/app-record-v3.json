@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 3,
+  "projectId": "p-1790000000000",
+  "createdAt": "2026-10-01T03:00:00.000Z",
+  "device": "ipad-webxr",
+  "frame": { "frameId": "site", "up": "+Y", "unit": "m" },
+  "measuredDistanceM": 2,
+  "scaleCheck": { "ok": true, "errorM": 0.012 },
+  "markers": [{ "id": "m1", "x": 0, "y": 0, "z": 0 }, { "id": "m2", "x": 2.012, "y": 0, "z": 0 }],
+  "routes": [{ "routeId": "r-a1", "deviceId": "a1", "waypoints": [{ "order": 0, "t": 0, "position": [1, 0, 0] }, { "order": 1, "t": 1, "position": [1.5, 0, 0] }] }],
+  "traces": [
+    { "deviceId": "a1", "samples": [{ "t": 0, "position": [0.3, -0.2, 0], "yaw": 0.5 }] },
+    { "deviceId": "so101-1", "samples": [
+      { "t": 0, "joints": { "turn": 0 } },
+      { "t": 0.033, "joints": { "turn": 0.1 } },
+      { "t": 0.5, "joints": { "turn": 0.6 } },
+      { "t": 1.2, "joints": { "turn": 1 } }
+    ] }
+  ],
+  "equipment": {
+    "site": { "id": "yard", "displayName": { "ja": "庭", "en": "Yard" }, "spanM": 2 },
+    "devices": [
+      { "id": "a1", "product": "scout", "owner": "viewer", "parent": "site", "pose": { "xyz": [0.3, -0.2, 0], "rpy": [0, 0, 0.5] } },
+      { "id": "so101-1", "product": "so101", "parent": "site" }
+    ]
+  },
+  "names": { "a1": "a1" }
+}
