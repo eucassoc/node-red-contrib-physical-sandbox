@@ -119,10 +119,16 @@ Add this to Claude Desktop's configuration (`claude_desktop_config.json`) and re
 
 Options (add them to `args` after `ps-nodered-mcp`):
 
-- `--url <address>`: the MCP route of Node-RED. Default `http://127.0.0.1:1880/physical-sandbox/mcp`; also `PS_NODERED_URL`.
+- `--url <address>`: the MCP route of Node-RED. Default `http://127.0.0.1:1880/physical-sandbox/mcp`; also `PS_NODERED_URL`. When Node-RED's settings set `httpAdminRoot`, the address must include it (for example `http://127.0.0.1:1880/admin/physical-sandbox/mcp` for `httpAdminRoot: '/admin'`).
 - `--user-dir <folder>`: Node-RED's user folder (userDir). Default `~/.node-red`; also `NODE_RED_USER_DIR`. If you start Node-RED with `-u <folder>`, give the same folder here.
+- `PS_BRIDGE_POLL_MS` (environment): while Node-RED cannot be reached, how often the bridge looks again for its tools, in milliseconds. Default 5000.
 
-The key lives in `<userDir>/physical-sandbox/mcp-key`. The plugin creates it when Node-RED starts, and the bridge reads it from there. The route answers only this computer, and only with that key.
+The key lives in `<userDir>/physical-sandbox/mcp-key`. The plugin creates it when Node-RED starts (readable by your user only; on Windows this file mode has no effect, so the folder's own permissions are what protect it), and the bridge reads it from there. The route answers only this computer, and only with that key.
+
+Limits of "this computer only":
+
+- Behind a reverse proxy or a tunnel on the same computer (nginx, Cloudflare Tunnel, ngrok and so on), every caller looks local to Node-RED, and only the key guards the route. Keep the key file private.
+- Node-RED in Docker does not see the host's calls as loopback, so the MCP route refuses them: the bridge does not work with Node-RED in a container.
 
 ### What the agent can do
 
@@ -130,7 +136,7 @@ The key lives in `<userDir>/physical-sandbox/mcp-key`. The plugin creates it whe
 - **Work out poses.** Inverse kinematics for a chain of a robot (position only in this version): the joint angles that put a hand at a point, or the closest ones when it is out of reach.
 - **Set the scene and play motion.** Place or remove robots, play state messages in the pane (a new attempt replaces the last one; loops can be stopped), and turn messages into a record for a `ps play` node.
 - **Open and save records.** Open a PS.com record, and save the stream as a new record or as the next version of the open one (same rules as the pane).
-- **Work on flows.** Read the flows in the open editor and propose a flow (see "No deploying" below).
+- **Work on flows.** Read the flows in the open editor and propose a flow (see "No deploying" below). Reading the flows (`ps_flows_read`) sends them to the agent, and through it to its AI provider: function nodes' code, broker addresses and the values of environment variables that are not secret (credentials are never included).
 - **Look at the pane.** Only while the switch below is on.
 
 ### The pictures switch

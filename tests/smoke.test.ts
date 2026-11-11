@@ -239,7 +239,7 @@ test('an MCP client on this machine, with the key the plugin made in the userDir
   assert.equal(big.status, 413);
   const bigAnswer = await big.json();
   assert.equal(bigAnswer.jsonrpc, '2.0');
-  assert.match(bigAnswer.error.message, /大きすぎます（5 MB まで） \/ The request is too large/);
+  assert.match(bigAnswer.error.message, /Node-RED の上限（apiMaxLength）を超えています \/ The request is over Node-RED's size limit/);
   const bad = await fetch(url, { method: 'POST', headers: auth, body: '{not json' });
   assert.equal(bad.status, 400);
   assert.equal((await bad.json()).error.code, -32700);

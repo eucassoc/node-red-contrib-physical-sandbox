@@ -21,14 +21,14 @@ import type { Hub } from '../hub.js';
 
 // What the agent is told, to pass on to the person, who may read either language
 export const FRAMES_WORDS = {
-  switchOff: '右ペインで「エージェントに映像を渡す」を入れてください'
+  switchOff: 'ペインで「エージェントに映像を渡す」を入れてください'
     + ' / Ask the person to turn on 「エージェントに映像を渡す」 (Share frames with the agent) in the Physical Sandbox pane: the picture is given only while it is on',
   noPane: `${LINK_WORDS.noEditor} / Open the Node-RED editor with the Physical Sandbox pane in a browser: the picture comes from an open pane`,
   tooMany: `一度に取得できる映像は ${FRAMES_MAX} 枚までです / At most ${FRAMES_MAX} frames can be had at once`,
   badTimes: 'times には、保存した記録として再生したときの秒数（0 以上の数）を指定してください / times are seconds into the stream as a saved record replays it (numbers, 0 or more)',
-  emptyStream: '流れに、場に置いたロボットの状態がまだありません。times を指定せずに、今の右ペインの映像を取得してください'
+  emptyStream: '流れている動きには、現地のロボットの状態がまだありません。times を指定せずに、今のペインの映像を取得してください'
     + ' / The stream holds no states of the devices on the scene yet: leave out times to get what the pane shows now',
-  badAnswer: `右ペインから受け取った映像の形が正しくありません / The pane's answer was not PNG or JPEG pictures of at most ${FRAME_MAX_SIDE} px`,
+  badAnswer: `ペインから受け取った映像の形が正しくありません / The pane's answer was not PNG or JPEG pictures of at most ${FRAME_MAX_SIDE} px`,
 };
 
 const failed = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });

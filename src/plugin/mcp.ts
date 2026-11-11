@@ -38,9 +38,9 @@ const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 export const MCP_WORDS = {
   notHere: 'この Node-RED を動かしている PC の中からだけ接続できます / Only an MCP client on the machine running this Node-RED may connect',
   fromBrowser: 'ブラウザのページからは接続できません / Requests from a browser page (with an Origin header) are refused',
-  badKey: 'MCP の鍵が違います。Node-RED のユーザーディレクトリにある physical-sandbox/mcp-key の中身を Authorization: Bearer に指定してください'
+  badKey: 'MCP のキーが違います。Node-RED のユーザーディレクトリにある physical-sandbox/mcp-key の中身を Authorization: Bearer に指定してください'
     + ' / The MCP key is missing or wrong: send the contents of physical-sandbox/mcp-key in the Node-RED user directory as Authorization: Bearer',
-  tooLarge: '送られた内容が大きすぎます（5 MB まで） / The request is too large (5 MB at most)',
+  tooLarge: '送られた内容が Node-RED の上限（apiMaxLength）を超えています / The request is over Node-RED\'s size limit (apiMaxLength)',
   notJson: '送られた内容を JSON として読み込めませんでした / The request is not JSON',
   failed: 'MCP の処理に失敗しました / Internal server error',
 };

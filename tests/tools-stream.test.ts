@@ -291,7 +291,7 @@ test('ps_scene_place and ps_scene_remove refuse as the pane does, in Japanese an
   } finally { await s.close(); }
 });
 
-test('a 60 s stream of 30 states a second with 16 joints goes in one call; a 6 MB call is refused 413, naming the limit in Japanese and English', { timeout: 30_000 }, async () => {
+test('a 60 s stream of 30 states a second with 16 joints goes in one call; a 6 MB call is refused 413, naming Node-RED\'s limit in Japanese and English', { timeout: 30_000 }, async () => {
   const s = await small({ adminJsonParser: true });
   try {
     const joints = (k: number) => Object.fromEntries(Array.from({ length: 16 }, (_, j) => [`joint_${j + 1}`, angle(k, j)]));
@@ -304,8 +304,8 @@ test('a 60 s stream of 30 states a second with 16 joints goes in one call; a 6 M
     const big = Array.from({ length: 6 * 1024 }, (_, k) => ({ topic: 'ps/local/arm/state', payload: { at: k, pad: 'x'.repeat(1024) } }));
     await assert.rejects(call(s.client, 'ps_stream_play', { messages: big }), (e: any) => {
       assert.equal(e.code, 413);
-      assert.match(String(e.message), /大きすぎます（5 MB まで）/);
-      assert.match(String(e.message), /too large \(5 MB at most\)/);
+      assert.match(String(e.message), /Node-RED の上限（apiMaxLength）を超えています/);
+      assert.match(String(e.message), /over Node-RED's size limit \(apiMaxLength\)/);
       return true;
     });
   } finally { await s.close(); }

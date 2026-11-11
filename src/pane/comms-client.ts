@@ -198,9 +198,9 @@ export function createApi(opts: { base: string; token: () => string | null; fetc
 }
 
 // What a pane says when it does not give its picture (the agent passes it on to the person)
-export const PANE_FRAMES_OFF = 'この右ペインでは「エージェントに映像を渡す」が入っていません / This pane does not share frames with the agent (its switch is off)';
-export const PANE_FRAMES_BAD = `右ペインに求める映像は 1 枚から ${FRAMES_MAX} 枚までです / A pane draws 1 to ${FRAMES_MAX} frames per request`;
-export const PANE_FRAMES_FAILED = 'この右ペインでは映像を作れませんでした / This pane could not draw the frame';
+export const PANE_FRAMES_OFF = 'このペインでは「エージェントに映像を渡す」が入っていません / This pane does not share frames with the agent (its switch is off)';
+export const PANE_FRAMES_BAD = `ペインに求める映像は 1 枚から ${FRAMES_MAX} 枚までです / A pane draws 1 to ${FRAMES_MAX} frames per request`;
+export const PANE_FRAMES_FAILED = 'このペインでは映像を作れませんでした / This pane could not draw the frame';
 export const PANE_FRAMES_TOO_LARGE = '映像が大きすぎて渡せませんでした / The frames were too large to hand over';
 export const PANE_FRAMES_HIDDEN = 'PS のタブを表示してください / Show the PS tab in the sidebar';
 

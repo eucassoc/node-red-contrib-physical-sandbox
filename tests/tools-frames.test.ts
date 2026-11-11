@@ -22,7 +22,7 @@ import { FRAME_MAX_BYTES, FRAME_MAX_SIDE, FRAMES_MAX, frameBudget } from '../src
 import { fakeClock, fakeRed } from './helpers/fake-red.js';
 import { jpegOf, pngOf, pngSize } from './helpers/png.js';
 
-const SWITCH_OFF = '右ペインで「エージェントに映像を渡す」を入れてください';
+const SWITCH_OFF = 'ペインで「エージェントに映像を渡す」を入れてください';
 
 async function small(o: { framesTimeoutMs?: number } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ps-tools-frames-'));

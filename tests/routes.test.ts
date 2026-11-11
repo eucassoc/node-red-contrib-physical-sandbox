@@ -769,8 +769,8 @@ test('a background name keeps no .. in it, and at most 200 bytes of UTF-8', () =
   assert.equal(safeName('🙂'.repeat(60)), '🙂'.repeat(50), 'never half a character');
 });
 
-test('every sentence shown to people keeps the package\'s wording (no 直す・決める・読む・機体・絵・版)', async () => {
-  const banned = /直す|直し|決め|決ま|読む|読ん|機体|絵|版/;
+test('every sentence shown to people keeps the package\'s wording (no 直す・決める・読む・機体・絵・版; キー not 鍵, ペイン not 右ペイン, no internal 流れに・場に置いた)', async () => {
+  const banned = /直す|直し|決め|決ま|読む|読ん|機体|絵|版|鍵|右ペイン|流れに|場に置|断られ|人がエディタ/;
   const japanese = /[぀-ヿ一-鿿]/;
   const sentences: [string, string][] = Object.entries(WORDS).map(([k, v]) => [`WORDS.${k}`, v]);
   for (const [k, v] of Object.entries(PANE_WORDS)) sentences.push([`pane WORDS.${k}`, v.ja]);
@@ -778,7 +778,7 @@ test('every sentence shown to people keeps the package\'s wording (no 直す・�
     for (const [k, v] of Object.entries(mod)) if (typeof v === 'string' && japanese.test(v)) sentences.push([`${file}.${k}`, v]);
   }
   // and every Japanese string literal in the plugin's own sources (comments left out)
-  for (const dir of ['src/core', 'src/plugin', 'src/plugin/tools', 'src/nodes', 'src/pane']) {
+  for (const dir of ['src/core', 'src/plugin', 'src/plugin/tools', 'src/nodes', 'src/pane', 'src/bin']) {
     const root = join(import.meta.dirname, '..', dir);
     if (!existsSync(root)) continue;
     for (const file of readdirSync(root).filter((f) => f.endsWith('.ts'))) {

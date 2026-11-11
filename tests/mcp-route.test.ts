@@ -168,7 +168,7 @@ test('no key, or a wrong one: 401, and the SDK client cannot connect', async () 
     const none = await raw(s.url);
     assert.equal(none.status, 401);
     assert.equal(none.json?.jsonrpc, '2.0');
-    assert.match(none.json?.error?.message, /鍵/);
+    assert.match(none.json?.error?.message, /キー/);
     assert.match(none.json?.error?.message, /key/);
     assert.match(none.headers.get('www-authenticate') ?? '', /^Bearer/);
     assert.match(none.json?.error?.message, /user directory/);
@@ -283,9 +283,9 @@ test(`a body over ${MCP_BODY_LIMIT / 1024 / 1024} MB, read by the route itself: 
       req.flushHeaders();
     });
     assert.equal(r.status, 413);
-    assert.match(r.json?.error?.message, /5 MB/);
-    assert.match(r.json?.error?.message, /大きすぎます/);
-    assert.match(r.json?.error?.message, /too large/);
+    assert.match(r.json?.error?.message, /apiMaxLength/);
+    assert.match(r.json?.error?.message, /上限/);
+    assert.match(r.json?.error?.message, /size limit/);
   } finally { await s.close(); }
 });
 
@@ -300,8 +300,8 @@ test('a body over 5 MB in Node-RED, whose own JSON parser answers first: the SDK
         client.callTool({ name: 'ps_status', arguments: { pad: 'x'.repeat(MCP_BODY_LIMIT) } }),
         (e: any) => {
           assert.equal(e.code, 413);
-          assert.match(String(e.message), /大きすぎます（5 MB まで）/);
-          assert.match(String(e.message), /too large/);
+          assert.match(String(e.message), /Node-RED の上限（apiMaxLength）を超えています/);
+          assert.match(String(e.message), /size limit \(apiMaxLength\)/);
           return true;
         },
       );

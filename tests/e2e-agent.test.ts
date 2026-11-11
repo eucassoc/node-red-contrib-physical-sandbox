@@ -161,7 +161,7 @@ test('the agent makes OpenArm raise both hands, loops the motion, and proposes a
   assert.equal(inline.record.traces[0].samples.length, 4);
 
   // Propose inject → ps play → mqtt out; the editor imports it, Node-RED runs what it ran
-  const before = await runningFlows();
+  const flowsBefore = await runningFlows();
   const nodes = [
     { id: 'go', type: 'inject', name: 'start', payload: 'start', payloadType: 'str', x: 120, y: 80, wires: [['play']] },
     { id: 'play', type: 'ps play', name: 'bon odori', source: 'inline', record: JSON.stringify(inline.record), loop: true, x: 300, y: 80, wires: [['out']] },
@@ -177,5 +177,5 @@ test('the agent makes OpenArm raise both hands, loops the motion, and proposes a
   assert.deepEqual(added[0].wires, [[added[1].id]]);
   assert.deepEqual(added[1].wires, [[added[2].id]]);
   await settle(100);
-  assert.deepEqual(await runningFlows(), before, 'the agent never deploys');
+  assert.deepEqual(await runningFlows(), flowsBefore, 'the agent never deploys');
 });

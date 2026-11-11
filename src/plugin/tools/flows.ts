@@ -27,7 +27,7 @@ export const FLOW_WORDS = {
     + ` / nodes[${i}] has the same id as nodes[${first}]: the ids must be unique within the proposal`,
   globalConfig: (i: number) => `nodes[${i}] は global-config です。人のグローバル環境変数を置き換えてしまうため、提案には含められません`
     + ` / nodes[${i}] is a global-config node, which would replace the person's global environment variables: it cannot be proposed`,
-  credentialsRemoved: '提案のノードの資格情報（credentials）は取り除きました。必要な資格情報は人がエディタで設定してください'
+  credentialsRemoved: '提案のノードの資格情報（credentials）は取り除きました。必要な資格情報はエディタで設定してください'
     + ' / The credentials in the proposed nodes were removed: the person enters any that are needed in the editor',
   flowsRefused: 'エディタからフローを取得できませんでした / The editor could not give its flows',
   notImported: 'The editor could not import the proposal',
