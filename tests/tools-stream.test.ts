@@ -546,3 +546,65 @@ test('an MQTT recording that runs on across 保存: 上書き保存 holds the wh
     assert.deepEqual(s.hub.statesAt([0, 2.5, 3])!.states, at.states, 'what the frames showed is what was saved');
   } finally { await s.close(); }
 });
+
+test('append across a save keeps both attempts, in the frames and in 上書き保存', { timeout: 20_000 }, async () => {
+  const s = await signedIn();
+  try {
+    json(await call(s.client, 'ps_stream_play', { messages: adjust('so101-1', 1) }));
+    s.clock.advance(1100);
+    json(await call(s.client, 'ps_record_save', { mode: 'new', name: 'twice' }));
+    json(await call(s.client, 'ps_stream_play', { messages: adjust('so101-1', 2), append: true }));
+    s.clock.advance(1100);
+    const at = s.hub.statesAt([0, 1.5])!;
+    assert.deepEqual(at.states.map(jointsOf), [{ 'so101-1': { shoulder_pan: 1 } }, { 'so101-1': { shoulder_pan: 2.12 } }], 'the first attempt, then the appended one (from 1.1 s, when it was played)');
+    assert.equal(json(await call(s.client, 'ps_record_save', { mode: 'over' })).version, '2');
+    const v2 = tracesOf(s.fake.record('ada', 'twice', '2'))['so101-1'];
+    assert.deepEqual(v2.map((x: any) => x.joints.shoulder_pan), [...adjust('so101-1', 1), ...adjust('so101-1', 2)].map((m) => m.payload.joints.shoulder_pan), 'both attempts');
+    assert.deepEqual(s.hub.statesAt([0, 1.5])!.states, at.states, 'what the frames showed is what was saved');
+  } finally { await s.close(); }
+});
+
+test('a save at 0.5 s of a 1 s play, then 上書き保存 after the play: the new version holds the whole play', { timeout: 20_000 }, async () => {
+  const s = await signedIn();
+  try {
+    json(await call(s.client, 'ps_stream_play', { messages: adjust('so101-1', 1) }));
+    s.clock.advance(500);
+    json(await call(s.client, 'ps_record_save', { mode: 'new', name: 'half' }));
+    assert.equal(tracesOf(s.fake.record('ada', 'half', '1'))['so101-1'].length, 16, 'what had played by then');
+    s.clock.advance(1000);
+    assert.equal(s.hub.status().playing, null);
+    assert.equal(s.hub.statesAt([0.99])!.states[0].length, 1);
+    assert.deepEqual(jointsOf(s.hub.statesAt([0.99])!.states[0]), { 'so101-1': { shoulder_pan: 1.3 } }, 'the frames have the rest of the play');
+    assert.equal(json(await call(s.client, 'ps_record_save', { mode: 'over' })).version, '2');
+    const v2 = tracesOf(s.fake.record('ada', 'half', '2'))['so101-1'];
+    assert.deepEqual(v2.map((x: any) => x.joints.shoulder_pan), adjust('so101-1', 1).map((m) => m.payload.joints.shoulder_pan), 'the whole play');
+  } finally { await s.close(); }
+});
+
+test('「記録を空にする」 pressed while a save is under way waits for it, and is not undone when the save ends', { timeout: 20_000 }, async () => {
+  const s = await signedIn();
+  try {
+    json(await call(s.client, 'ps_stream_play', { messages: wave() }));
+    s.clock.advance(2000);
+    let release!: () => void;
+    s.fake.holdPuts = new Promise<void>((done) => { release = done; });
+    const saving = call(s.client, 'ps_record_save', { mode: 'new', name: 'held' });
+    for (let i = 0; i < 200 && s.fake.putsWaiting === 0; i += 1) await new Promise((done) => setTimeout(done, 10));
+    let cleared = false;
+    const clearing = call(s.client, 'ps_stream_clear').then((answer) => { cleared = true; return answer; });
+    await new Promise((done) => setTimeout(done, 50));
+    assert.equal(cleared, false, 'the clear waits for the save');
+    assert.equal(s.hub.status().recorded, 62);
+    s.fake.holdPuts = null;
+    release();
+    assert.equal(json(await saving).ref, 'ada/held');
+    assert.equal(json(await clearing).status.recorded, 0);
+    assert.deepEqual(s.hub.status().opened, { ref: 'ada/held', version: '1', own: true });
+    assert.equal(s.hub.statesAt([0]), null, 'after the save, the clear: nothing a save would write');
+
+    json(await call(s.client, 'ps_stream_play', { messages: [{ topic: 'ps/local/so101-2/state', payload: { at: 0, joints: { shoulder_pan: 0.2 } } }] }));
+    s.clock.advance(100);
+    assert.equal(json(await call(s.client, 'ps_record_save', { mode: 'over' })).version, '2');
+    assert.deepEqual(s.fake.record('ada', 'held', '2').traces, [{ deviceId: 'so101-2', samples: [{ t: 0, joints: { shoulder_pan: 0.2 } }] }]);
+  } finally { await s.close(); }
+});

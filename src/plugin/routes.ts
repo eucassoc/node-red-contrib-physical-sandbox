@@ -342,7 +342,7 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
   app.post(`${P}/stream/play`, write, jsonBody, handle(async (req, res) => { res.json(await actions.play(req.body)); }));
 
   app.post(`${P}/stream/stop`, write, handle((req, res) => { hub.stop(); res.json({ status: hub.status() }); }));
-  app.post(`${P}/stream/clear`, write, handle((req, res) => { res.json(actions.clear()); }));
+  app.post(`${P}/stream/clear`, write, handle(async (req, res) => { res.json(await actions.clear()); }));
 
   // ---- saving ----
 

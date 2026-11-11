@@ -132,8 +132,8 @@ export interface Actions {
    * time, kept when PS.com cannot be reached. Saved, it is the opened record and the stream is re-based on it.
    */
   save(body: Json): Promise<SaveResult & { skipped: string[] }>;
-  /** 「記録を空にする」 (the pane's button and ps_stream_clear): hub.clearStream. */
-  clear(): { status: Status };
+  /** 「記録を空にする」 (the pane's button and ps_stream_clear): hub.clearStream, after a save under way. */
+  clear(): Promise<{ status: Status }>;
 }
 
 export function createActions(hub: Hub, opts: ActionOptions = {}): Actions {
@@ -323,6 +323,6 @@ export function createActions(hub: Hub, opts: ActionOptions = {}): Actions {
     setSite,
     play,
     save: saveStream,
-    clear: () => { hub.clearStream(); return { status: hub.status() }; },
+    clear: () => hub.afterSaves(() => { hub.clearStream(); return { status: hub.status() }; }),
   };
 }

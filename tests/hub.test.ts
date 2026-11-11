@@ -419,12 +419,12 @@ test('playMessages with nothing playable plays nothing and leaves a play under w
 
 test('a 60 s stream of 30 states a second with 16 joints is scheduled without holding the event loop for more than 50 ms at a time', () => {
   // Measured so that a busy machine (the whole suite in parallel, a GC pause) does not decide it:
-  // the scheduling is the best of three tries, and the ticks are judged by their 99th percentile
-  // (one stall of the process is not the hub's), with a loose cap on the longest.
+  // three tries, and the best one counts: its scheduling and its longest tick must each be under
+  // 50 ms (a stall of the process in one try is not the hub's).
   const joints = (k: number) => Object.fromEntries(Array.from({ length: 16 }, (_, j) => [`joint_${j + 1}`, Math.round(Math.sin(k / 10 + j) * 1000) / 1000]));
   const messages = Array.from({ length: 60 * 30 }, (_, k) => ({ topic: 'ps/local/openarm-1/state', payload: { at: Math.round(k * 1000 / 30), joints: joints(k) } }));
   let scheduling = Infinity;
-  let ticks: number[] = [];
+  let longest = Infinity;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const userDir = tmp();
     const red = fakeRed({ userDir });
@@ -448,20 +448,13 @@ test('a 60 s stream of 30 states a second with 16 joints is scheduled without ho
     assert.equal(hub.status().playing, null, 'played to the end');
     assert.equal(hub.streamBuffer().length, 1800);
     hub.close();
-    if (took < scheduling) { scheduling = took; }
-    if (attempt === 0 || percentile(timed, 0.99) < percentile(ticks, 0.99)) ticks = timed;
+    assert.ok(timed.length > 100, 'the ticks were timed');
+    scheduling = Math.min(scheduling, took);
+    longest = Math.min(longest, Math.max(...timed));
   }
-  assert.ok(scheduling < 50, `scheduling held the loop for ${scheduling.toFixed(1)} ms`);
-  assert.ok(ticks.length > 100, 'the ticks were timed');
-  assert.ok(percentile(ticks, 0.99) < 50, `99% of the ticks took under ${percentile(ticks, 0.99).toFixed(1)} ms`);
-  assert.ok(Math.max(...ticks) < 500, `the longest tick held the loop for ${Math.max(...ticks).toFixed(1)} ms`);
+  assert.ok(scheduling < 50, `scheduling held the loop for ${scheduling.toFixed(1)} ms (best of three)`);
+  assert.ok(longest < 50, `one tick held the loop for ${longest.toFixed(1)} ms (the smallest longest tick of three tries)`);
 });
-
-/** The value below which a share `p` of `list` falls. */
-function percentile(list: number[], p: number): number {
-  const sorted = [...list].sort((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] ?? 0;
-}
 
 test('each playMessages takes the place of the agent\'s last attempt (live and loaded states stay); append keeps both', () => {
   const { hub, clock } = setup();

@@ -124,7 +124,7 @@ export function registerStreamTools(server: McpServer, hub: Hub, actions: Action
     description: 'Empty the stream, as the pane\'s 「記録を空にする」 does: every state kept (the agent\'s, the live ones and the opened record\'s '
       + 'traces) and the latest states are let go, and a play of the agent under way stops. A save afterwards writes only what plays after the clear: '
       + 'the record stays open, so mode over still saves its next version (same name), with only those traces. The scene stays.',
-  }, async () => text(actions.clear()));
+  }, async () => text(await actions.clear()));
 
   server.registerTool('ps_record_inline', {
     description: 'State messages (as ps_stream_play takes them) turned into a record on the current scene (its devices, names and floor), '
