@@ -28,6 +28,8 @@
       "signIn": "PS.com にログインしてください",
       "notFound": "記録が見つかりませんでした（__ref__）",
       "notFoundSignedOut": "記録が見つかりませんでした（__ref__）。非公開の記録は、Physical Sandbox の画面で PS.com にログインしてから再生してください",
+      "notARecord": "__ref__ は記録ではありません",
+      "refused": "PS.com から記録を取得できませんでした",
       "empty": "記録に再生できる動きがありません",
       "playing": "再生中 __n__/__m__",
       "ended": "再生終了 __n__/__m__",

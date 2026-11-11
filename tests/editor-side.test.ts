@@ -10,7 +10,7 @@ import { ANSWER_ROUTE, createEditorLink } from '../src/plugin/editor-link.js';
 import { fakeEditor, settle } from './helpers/fake-editor.js';
 import { fakeRed } from './helpers/fake-red.js';
 
-const PROPOSED = 'エージェントの提案を読み込みました。確かめてから Deploy してください';
+const PROPOSED = 'エージェントの提案を読み込みました。確かめてからデプロイしてください';
 
 test('flows: the complete node set without credentials, posted as text with X-PS-Pane: 1 to the answer route (Node-RED\'s 5 MB JSON parser is not in the way)', async () => {
   const editor = fakeEditor({ nodeSet: [{ id: 't', type: 'tab' }, { id: 'n', type: 'inject', z: 't' }] });

@@ -100,3 +100,45 @@ for (const [lang, expected] of [['ja', 'プラグインが読み込まれてい�
     }
   });
 }
+
+for (const lang of ['ja', 'en-US'] as const) {
+  test(`ps play says a PS.com refusal in the ${lang} catalog's words, never the plugin's Japanese or a raw code`, async () => {
+    const catalog = flatten(readCatalog('ps-play', lang));
+    const fill = (key: string, ref = 'ada/walk') => catalog[`ps-play.status.${key}`].replace('__ref__', ref);
+    // from the plugin's own bundle: matched by name, with the plugin's Japanese as the message
+    const foreign = (code: string, status: number, message = code) => Object.assign(new Error(message), { name: 'Refused', code, status });
+    const cases: [Error, string][] = [
+      [foreign('not-a-record', 200, 'ada/walk は記録ではありません'), fill('notARecord')],
+      [foreign('weird-code', 400), fill('refused')],
+      [foreign('bad-answer', 200), fill('refused')],
+      [foreign('not-found', 404), fill('notFound')],
+      [Object.assign(new Error('x'), { name: 'Offline' }), fill('offline')],
+    ];
+    for (const [error, text] of cases) {
+      const hub = { client: { openRecord: async () => { throw error; }, status: () => ({ signedIn: true, handle: 'ada' }) }, refreshStatus() {}, scene: () => ({ site: 'local' }), push() {} };
+      const withLang = (red: any) => {
+        red._ = catalogUnderscore(lang);
+        red.plugins.get = () => ({ hub });
+        return psPlayNode(red);
+      };
+      await helper.load([withLang], [{ id: 'p', type: 'ps play', source: 'record', ref: 'ada/walk', wires: [[]] }]);
+      const node = helper.getNode('p');
+      const seen: any[] = [];
+      node.status = (s: any) => { seen.push(s); };
+      node.on('call:error', () => {});
+      node.receive({ payload: 'start' });
+      for (let i = 0; i < 50 && seen.at(-1)?.fill !== 'red'; i += 1) await new Promise((done) => setTimeout(done, 5));
+      assert.equal(seen.at(-1)?.text, text, `${(error as any).code ?? error.name}`);
+      assert.doesNotMatch(text, /weird-code|bad-answer/);
+      if (lang === 'en-US') assert.doesNotMatch(text, japanese);
+      await helper.unload();
+    }
+  });
+}
+
+test('the English statuses say it as the pane does', () => {
+  const en = flatten(readCatalog('ps-play', 'en-US'));
+  assert.equal(en['ps-play.status.offline'], 'PS.com could not be reached');
+  assert.match(en['ps-play.status.notFound'], /^The record was not found \(__ref__\)$/);
+  assert.match(en['ps-play.status.notFoundSignedOut'], /^The record was not found \(__ref__\)\. /);
+});

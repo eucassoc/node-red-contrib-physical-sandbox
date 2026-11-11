@@ -25,7 +25,7 @@ import { fakeClock, fakeRed } from './helpers/fake-red.js';
 import { installBuiltPackage } from './helpers/built-package.js';
 
 const require = createRequire(import.meta.url);
-const PROPOSED = 'エージェントの提案を読み込みました。確かめてから Deploy してください';
+const PROPOSED = 'エージェントの提案を読み込みました。確かめてからデプロイしてください';
 
 let RED: any;
 let server: http.Server;

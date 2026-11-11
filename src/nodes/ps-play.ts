@@ -93,7 +93,10 @@ export default function psPlayNode(RED: NodeAPI): void {
         if (refused && (e as Refused).status === 404) {
           throw new Shown(T(hub.client.status().signedIn ? 'notFound' : 'notFoundSignedOut', { ref }));
         }
-        if (refused && (e as Refused).message && (e as Refused).message !== (e as Refused).code) throw new Shown((e as Refused).message);
+        // Said from the node's catalog in the runtime's language: never the plugin's Japanese sentence or PS.com's bare code
+        if (refused && (e as Refused).code === 'not-a-record') throw new Shown(T('notARecord', { ref }));
+        if (refused && (e as Refused).code === 'bad-name') throw new Shown(T('badRef'));
+        if (refused) throw new Shown(T('refused'));
         throw e;
       }
     }
