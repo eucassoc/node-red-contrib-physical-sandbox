@@ -272,7 +272,9 @@ function sceneFloor(raw: unknown): Scene['floor'] {
 /**
  * Saving a stream over `baseRecord` (psbx `record_edit.merge_into`'s rule): a copy where
  *
- * - each device the stream carried gets its trace replaced (or added) by the stream's;
+ * - each device `messages` carry gets its trace replaced (or added) by theirs. The caller passes
+ *   only what came in after the record was opened (its live and agent states): a trace nothing
+ *   new came for is kept exactly as the record has it, samples, precision and fields;
  * - each device whose pose the scene changed in x, y or yaw gets those three, keeping its z, roll
  *   and pitch (an arm standing on a table stays up there); a device with no pose takes the scene's;
  * - a device the scene has and the base does not is added, with the outside names the scene gives it;

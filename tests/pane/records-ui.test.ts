@@ -28,12 +28,11 @@ test('the lines: what the stream holds, the opened record, what is playing, the 
   assert.deepEqual(unsentLines({}), []);
 });
 
-test('再生 and 頭へ send again what this pane opened, else the hub\'s opened PS.com record at its version', () => {
-  const file = { record: { schemaVersion: 3 }, file: 'a.json' };
-  assert.equal(playAgainBody(file, { opened: { ref: 'ada/walk', version: '3', own: true } }), file);
-  assert.deepEqual(playAgainBody(null, { opened: { ref: 'ada/walk', version: '3', own: true } }), { ref: 'ada/walk:3' });
-  assert.equal(playAgainBody(null, { opened: { file: 'a.json' } }), null, 'a file opened in another pane is not here');
-  assert.equal(playAgainBody(null, null), null);
+test('再生 and 頭へ play what the hub has open, never opening it again; with nothing open they do nothing', () => {
+  assert.deepEqual(playAgainBody({ opened: { ref: 'ada/walk', version: '3', own: true } }), { replay: true });
+  assert.deepEqual(playAgainBody({ opened: { file: 'a.json' } }), { replay: true }, 'a file opened in another pane too');
+  assert.equal(playAgainBody({ opened: null }), null);
+  assert.equal(playAgainBody(null), null);
 });
 
 test('a new record\'s name follows the catalog rule', () => {

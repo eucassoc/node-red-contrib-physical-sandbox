@@ -875,3 +875,96 @@ test('records/mine lists the signed-in person\'s records from PS.com; signed out
     assert.deepEqual(r.json, { rows: [], offline: true });
   } finally { await s.close(); await fake.stop(); }
 });
+
+/** A record psbx could write: 50 samples a second, starting late, full precision, a field of its own; yaw-only and same-t samples. */
+const fastRecord = {
+  schemaVersion: 3, frame: { frameId: 'site', up: '+Y', unit: 'm' }, markers: [],
+  equipment: { site: { id: 'local' }, devices: [
+    { id: 'arm', product: 'physical-sandbox/so101:1', owner: 'viewer', parent: 'site', pose: { xyz: [0, 0, 0], rpy: [0, 0, 0] } },
+    { id: 'cart', product: 'physical-sandbox/scout:1', owner: 'viewer', parent: 'site', pose: { xyz: [1, 0, 0], rpy: [0, 0, 0] } },
+  ] },
+  names: { arm: 'arm', cart: 'cart' },
+  traces: [
+    { deviceId: 'arm', samples: Array.from({ length: 50 }, (_, i) => ({ t: 0.5 + i * 0.02, joints: { j: 0.123456789 + i }, effort: i })) },
+    { deviceId: 'cart', samples: [{ t: 0.25, position: [1, 0, 0], yaw: 0.1 }, { t: 0.25, position: [1.1, 0, 0] }, { t: 0.75, yaw: 0.987654321 }] },
+  ],
+  routes: [],
+};
+
+test('saving over an opened record that nothing live changed is unchanged: every trace, sample, precision and field as it was', async () => {
+  const fake = await new FakePsCom().start();
+  fake.seed('ada', 'fast', '1', fastRecord);
+  const s = await setup({ catalogBase: fake.base });
+  try {
+    await signedInWith(fake, s, 'fast');
+    const r = await s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
+    assert.deepEqual([r.json.saved, r.json.version, r.json.unchanged], [true, '1', true], r.text);
+    // 再生 plays it again, and nothing it plays is kept: still unchanged
+    assert.equal((await s.call('POST', '/physical-sandbox/stream/play', { replay: true })).status, 200);
+    s.clock.advance(2000);
+    const again = await s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
+    assert.deepEqual([again.json.version, again.json.unchanged], ['1', true]);
+    const exported = await s.call('POST', '/physical-sandbox/record/export', { name: 'fast' });
+    assert.deepEqual(JSON.parse(readFileSync(exported.json.file, 'utf8')).traces, fastRecord.traces);
+  } finally { await s.close(); await fake.stop(); }
+});
+
+test('a live state for one device of an opened record replaces that device\'s trace only, over, as new and in an export', async () => {
+  const fake = await new FakePsCom().start();
+  fake.seed('ada', 'fast', '1', fastRecord);
+  const s = await setup({ catalogBase: fake.base });
+  try {
+    await signedInWith(fake, s, 'fast');
+    const at = s.clock.now();
+    s.hub.push({ topic: 'ps/local/cart/state', payload: { at, position: [2, 0, 0], yaw: 1 } }, 'mqtt');
+    s.hub.push({ topic: 'ps/local/cart/state', payload: { at: at + 1000, position: [3, 0, 0], yaw: 1 } }, 'mqtt');
+    const cart = { deviceId: 'cart', samples: [{ t: 0, position: [2, 0, 0], yaw: 1 }, { t: 1, position: [3, 0, 0], yaw: 1 }] };
+
+    const exported = await s.call('POST', '/physical-sandbox/record/export', { name: 'fast' });
+    assert.deepEqual(JSON.parse(readFileSync(exported.json.file, 'utf8')).traces, [fastRecord.traces[0], cart]);
+    const asNew = await s.call('POST', '/physical-sandbox/record/save', { mode: 'new', name: 'fast-cart' });
+    assert.deepEqual([asNew.json.saved, asNew.json.ref], [true, 'ada/fast-cart'], asNew.text);
+    assert.deepEqual(fake.record('ada', 'fast-cart', '1').traces, [fastRecord.traces[0], cart]);
+
+    await s.call('POST', '/physical-sandbox/stream/play', { ref: 'ada/fast' });
+    s.hub.stop();
+    s.hub.push({ topic: 'ps/local/cart/state', payload: { at, position: [2, 0, 0], yaw: 1 } }, 'mqtt');
+    s.hub.push({ topic: 'ps/local/cart/state', payload: { at: at + 1000, position: [3, 0, 0], yaw: 1 } }, 'mqtt');
+    const over = await s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
+    assert.deepEqual([over.json.saved, over.json.version, over.json.unchanged], [true, '2', false], over.text);
+    const saved = fake.record('ada', 'fast', '2');
+    assert.deepEqual(saved.traces, [fastRecord.traces[0], cart]);
+    assert.deepEqual({ ...saved, traces: null }, { ...fastRecord, traces: null }, 'everything else as it was');
+  } finally { await s.close(); await fake.stop(); }
+});
+
+test('stream/play {replay: true} plays the opened record from the hub\'s copy: no PS.com, the live recording and the opened record stay', async () => {
+  const fake = await new FakePsCom().start();
+  fake.seed('ada', 'walk', '1', walkRecord);
+  const s = await setup({ catalogBase: fake.base });
+  try {
+    let r = await s.call('POST', '/physical-sandbox/stream/play', { replay: true });
+    assert.equal(r.status, 400, 'nothing is open');
+    assert.equal(r.json.error, WORDS.noRecord);
+
+    await signedInWith(fake, s, 'walk');
+    s.hub.push({ topic: 'ps/local/arm/state', payload: { at: s.clock.now(), joints: { j: 5 } } }, 'mqtt');
+    const r2 = await s.call('POST', '/physical-sandbox/record/save', { mode: 'new', name: 'walk-live' });
+    assert.equal(r2.json.ref, 'ada/walk-live');
+    await fake.stop();
+    const asked = fake.calls.length;
+
+    r = await s.call('POST', '/physical-sandbox/stream/play', { replay: true });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual([r.json.source, r.json.count], ['ada/walk-live:1', 1]);
+    assert.equal(fake.calls.length, asked, 'PS.com is not asked (it is out of reach)');
+    assert.deepEqual(s.red.retained('ps-pane/status').opened, { ref: 'ada/walk-live', version: '1', own: true }, 'still the record saved as new');
+    assert.equal(s.hub.liveBuffer().length, 1, 'the live recording stays');
+    assert.equal(s.red.published.filter((p) => p.topic === 'ps-pane/state').at(-1)?.data.from, 'record');
+
+    // a file's record plays again the same way
+    await s.call('POST', '/physical-sandbox/stream/play', { record: walkRecord, file: 'walk.record.json' });
+    r = await s.call('POST', '/physical-sandbox/stream/play', { replay: true, speed: 2 });
+    assert.deepEqual([r.json.source, r.json.duration], ['walk.record.json', 1]);
+  } finally { await s.close(); await fake.stop(); }
+});

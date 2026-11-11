@@ -86,6 +86,11 @@ export interface Hub {
   stop(): void;
   /** What a save writes: the opened record's states (on its time), then the live and agent ones. */
   streamBuffer(): Message[];
+  /**
+   * The live and agent states only (what came in since the opened record was opened): over an
+   * opened record these are all a save changes, so every other trace stays exactly as the record has it.
+   */
+  liveBuffer(): Message[];
   /** Empty the stream buffer and forget the latest states (an empty snapshot goes to the panes). */
   clearStream(): void;
   status(): Status;
@@ -517,6 +522,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     play,
     stop,
     streamBuffer: () => plain([...loaded, ...live]),
+    liveBuffer: () => plain(live),
     clearStream,
     status,
     publishStatus,

@@ -1,6 +1,7 @@
 /**
  * Records and PS.com: opening a record and playing it (`POST stream/play`, from PS.com by
- * `handle/name` or from a file), stopping it, going back to its start; what the stream holds
+ * `handle/name` or from a file), playing the opened one again from the hub's copy (再生, and 頭へ,
+ * which goes back to its start), stopping it; what the stream holds
  * (「流れている動きを記録中（n 件）」, 「記録を空にする」); the two saves, the export, the copies kept
  * while PS.com could not be reached (red, with 「再送信する」); signing in with a 6-digit code; and
  * the switch that lets the agent have the stage's frames.
@@ -48,11 +49,12 @@ export function playingLine(status: PaneStatus | null): string | null {
 export const unsentLines = (status: PaneStatus | null): { name: string; text: string }[] =>
   (status?.unsent ?? []).map((u) => ({ name: u.name, text: ja('unsent', { name: u.name }) }));
 
-/** What 再生 and 頭へ send again: the record opened last from this pane, else the hub's opened PS.com record. */
-export function playAgainBody(last: Json | null, status: PaneStatus | null): Json | null {
-  if (last) return last;
-  const opened = status?.opened;
-  return opened && 'ref' in opened ? { ref: `${opened.ref}:${opened.version}` } : null;
+/**
+ * What 再生 and 頭へ send: play the record the hub has open, from its copy (never opening it again,
+ * which would empty the stream and ask PS.com); null when nothing is open. Only 「記録を開く」 opens.
+ */
+export function playAgainBody(status: PaneStatus | null): Json | null {
+  return status?.opened ? { replay: true } : null;
 }
 
 /** The rows of `GET records/mine` to open, or the line that says why there are none. */
@@ -77,8 +79,6 @@ export function mountRecordsUi(opts: {
 }): RecordsUi {
   const { api, say } = opts;
   let status: PaneStatus | null = null;
-  /** What opened the record last from this pane (a file's record stays here to play again). */
-  let lastOpened: Json | null = null;
 
   const fail = (e: unknown) => say(e instanceof PaneError ? e.message : ja('failed'));
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className = ''): HTMLElementTagNameMap[K] => {
@@ -133,10 +133,7 @@ export function mountRecordsUi(opts: {
       const open = el('button', 'ps-link');
       open.type = 'button';
       open.textContent = row.label;
-      open.addEventListener('click', () => {
-        lastOpened = { ref: row.ref };
-        void play(lastOpened);
-      });
+      open.addEventListener('click', () => { void play({ ref: row.ref }); });
       const detail = el('small', 'ps-source');
       detail.textContent = row.detail;
       item.append(open, ' ', detail);
@@ -160,8 +157,7 @@ export function mountRecordsUi(opts: {
   openRefButton.addEventListener('click', () => {
     const ref = refInput.value.trim();
     if (!ref) return;
-    lastOpened = { ref };
-    void play(lastOpened);
+    void play({ ref });
   });
   fileInput.addEventListener('change', async () => {
     const file = fileInput.files?.[0];
@@ -170,16 +166,15 @@ export function mountRecordsUi(opts: {
     let record: unknown;
     try { record = JSON.parse(await file.text()); } catch { record = null; }
     if (!record || typeof record !== 'object' || Array.isArray(record)) { say(ja('badFile'), en('badFile')); return; }
-    lastOpened = { record, file: file.name };
-    void play(lastOpened);
+    void play({ record, file: file.name });
   });
   playButton.addEventListener('click', () => {
-    const body = playAgainBody(lastOpened, status);
+    const body = playAgainBody(status);
     if (body) void play(body);
   });
   stopButton.addEventListener('click', () => { api.post('stream/stop').catch(fail); });
   startButton.addEventListener('click', () => {
-    const body = playAgainBody(lastOpened, status);
+    const body = playAgainBody(status);
     if (body) void play(body, true);
   });
 
@@ -333,7 +328,7 @@ export function mountRecordsUi(opts: {
     const playing = playingLine(status);
     playingText.textContent = playing ?? '';
     playingText.hidden = !playing;
-    const canPlay = playAgainBody(lastOpened, status) !== null;
+    const canPlay = playAgainBody(status) !== null;
     playButton.disabled = !canPlay;
     startButton.disabled = !canPlay;
     stopButton.disabled = !status.playing;

@@ -480,10 +480,17 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
   // ---- the stream ----
 
   app.post(`${P}/stream/play`, write, jsonBody, handle(async (req, res) => {
-    const { record, ref, file, loop, speed } = req.body;
+    const { record, ref, file, loop, speed, replay } = req.body;
     let source: string;
     let played: Json;
-    if (typeof ref === 'string' && ref) {
+    if (replay === true) {
+      // 再生・頭へ: the record already open, from the hub's copy (not opened again: the stream, the
+      // live recording and the opened record stay as they are, and PS.com is not asked)
+      const opened = hub.openedRecord();
+      if (!opened) throw new Answer(400, WORDS.noRecord, 'no-record');
+      source = 'ref' in opened ? `${opened.ref}:${opened.version}` : opened.file;
+      played = opened.record;
+    } else if (typeof ref === 'string' && ref) {
       let got;
       try {
         got = await hub.client.openRecord(ref);
@@ -516,18 +523,19 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
   // ---- saving ----
 
   /**
-   * What a save writes: over the opened record (its states are in the stream on its own time, so
-   * what the stream did not change stays as it was), else the stream as a new record.
+   * What a save writes: over the opened record, else the stream as a new record. Over the opened
+   * record only the live and agent states change anything (the devices they are of get their traces
+   * replaced): the record's own states are in the stream on its own time, and re-deriving them would
+   * thin a 50/s trace, round its values and drop fields this package does not know.
    */
   function recordToSave(opened: Opened | null, title: string | undefined, basedOn: boolean): { record: Json; skipped: string[] } {
     const scene = hub.scene();
-    const buffer = hub.streamBuffer();
-    const built = messagesToRecord(scene, buffer, { title });
-    if (!opened) return built;
-    const record = mergeStreamInto(opened.record, scene, buffer);
+    if (!opened) return messagesToRecord(scene, hub.streamBuffer(), { title });
+    const live = hub.liveBuffer();
+    const record = mergeStreamInto(opened.record, scene, live);
     if (title) record.name = title;
     if (basedOn && 'ref' in opened) record.basedOn = `${opened.ref}:${opened.version}`;
-    return { record, skipped: built.skipped };
+    return { record, skipped: messagesToRecord(scene, live).skipped };
   }
 
   app.post(`${P}/record/save`, write, jsonBody, handle(async (req, res) => {
