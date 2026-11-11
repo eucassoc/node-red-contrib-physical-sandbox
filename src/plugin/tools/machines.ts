@@ -12,6 +12,9 @@ import type { Hub } from '../hub.js';
 
 type FetchLike = (url: string, init?: any) => Promise<any>;
 
+/** The largest coordinate (and yaw) ps_ik takes: far beyond any site, and far from an overflow. */
+const LIMIT_M = 1000;
+
 // What the agent is told, to pass on to the person, who may read either language
 export const MACHINE_WORDS = {
   noMachine: 'このロボットは見つかりません。ps_machines_list で一覧を確認してください / No such robot: see ps_machines_list for the robots there are',
@@ -19,6 +22,12 @@ export const MACHINE_WORDS = {
   noChain: (name: string, names: string[]) => `このロボットに ${name} というチェーンはありません。指定できるチェーン: ${names.join(', ') || 'なし'}`
     + ` / This robot has no chain ${name}; its chains: ${names.join(', ') || 'none'}`,
   badChain: (why: string) => `このチェーンでは関節角を求められません: ${why} / The joint angles cannot be worked out for this chain: ${why}`,
+  onParent: (parent: string) => `この機器は ${parent} に取り付けられています。pose は ${parent} から見た位置と向きのため、場の座標の目標には使えません`
+    + ` / This device hangs on ${parent}: its pose is relative to ${parent}, so site-frame targets are not available for it`,
+  tilted: 'この機器は傾けて置かれています（roll または pitch が 0 ではありません）。ps_ik の placement は向き（yaw）しか扱わないため、場の座標の目標には使えません'
+    + ' / This device is placed tilted (its roll or pitch is not 0): ps_ik\'s placement takes the yaw only, so site-frame targets are not available for it',
+  outOfRange: `目標と placement の値は、それぞれ ${LIMIT_M} 以内の数で指定してください（m、yaw は rad）`
+    + ` / The target and placement values must each be numbers within ${LIMIT_M} (metres; radians for yaw)`,
   outOfReach: (errorM: number) => `目標の位置に届きません。最も近づく関節角を返しました（目標まで ${errorM.toFixed(3)} m）`
     + ` / The target is out of reach: these are the joint angles that come closest (${errorM.toFixed(3)} m from the target)`,
 };
@@ -73,6 +82,14 @@ class Told extends Error {}
 
 const XYZ = z.array(z.number()).length(3);
 
+const inRange = (values: number[]): boolean => values.every((v) => Number.isFinite(v) && Math.abs(v) <= LIMIT_M);
+
+/** A device stands on the site itself: no parent, or the site. */
+const onSite = (parent: unknown): boolean => parent === undefined || parent === null || parent === '' || parent === 'site';
+
+/** Joints that are not listed as movable: fixed ones, and a floating or planar base (no single value moves it). */
+const NOT_MOVABLE = new Set(['fixed', 'floating', 'planar']);
+
 export function registerMachineTools(server: McpServer, hub: Hub, machines: MachineAccess): void {
   /** The robot a ref names: a device of the scene (by id), else a product. */
   async function robotOf(ref: string) {
@@ -103,15 +120,19 @@ export function registerMachineTools(server: McpServer, hub: Hub, machines: Mach
   });
 
   server.registerTool('ps_machine_joints', {
-    description: 'A robot\'s movable joints and chains, from its bundle. ref is a device id of the scene (then its product, its pose in the site and the placement '
-      + 'to give ps_ik are answered too) or a product as ps_machines_list gives it. joints: name, type, lower and upper limits (radians; metres for a prismatic '
-      + 'joint; null for a joint that turns freely) and mimic when the joint follows another (it is not set on its own). '
-      + 'chains: name, baseLink, tipLink and the joints in order; ps_ik works on a chain.',
+    description: 'A robot\'s movable joints and chains, from its bundle. ref is a device id of the scene or a product as ps_machines_list gives it. '
+      + 'joints: name, type, lower and upper limits (radians; metres for a prismatic joint; null for a joint that turns freely) and mimic when the joint follows '
+      + 'another (it is not set on its own); fixed joints and a floating or planar base are not listed. chains: name, baseLink, tipLink and the joints in order; '
+      + 'ps_ik works on a chain. For a device of the scene its product and pose are answered too. pose is the scene\'s starting pose: a stream may have moved '
+      + 'the device since. placement (what ps_ik takes for site-frame targets) is given only for a device standing on the site with roll and pitch 0, because '
+      + 'ps_ik uses the yaw only; a device hanging on another device answers that parent instead (its pose is relative to it), and a note says why there is no '
+      + 'placement. Site-frame heights assume the robot\'s root link stands on the floor (the pane lifts a robot whose meshes reach below its root link, '
+      + 'by a few millimetres for the arms in the catalog).',
     inputSchema: z.object({ ref: z.string().min(1).describe('A device id of the scene, or a product (handle/name:version, or a bare name).') }),
   }, async ({ ref }) => {
     try {
       const { device, product, bundle } = await robotOf(ref);
-      const joints = bundle.joints.filter((j) => j.type !== 'fixed').map((j) => {
+      const joints = bundle.joints.filter((j) => !NOT_MOVABLE.has(j.type)).map((j) => {
         const free = j.type !== 'revolute' && j.type !== 'prismatic';
         const row: Record<string, unknown> = { name: j.name, type: j.type, lower: free ? null : j.lower ?? null, upper: free ? null : j.upper ?? null };
         if (j.mimic) row.mimic = { joint: j.mimic.joint, multiplier: j.mimic.multiplier ?? 1, offset: j.mimic.offset ?? 0 };
@@ -121,9 +142,13 @@ export function registerMachineTools(server: McpServer, hub: Hub, machines: Mach
       const answer: Record<string, unknown> = { product };
       if (device) {
         answer.device = device.id;
+        if (!onSite(device.parent)) answer.parent = device.parent;
         if (device.pose) {
           answer.pose = device.pose;
-          answer.placement = { xyz: device.pose.xyz, yaw: device.pose.rpy?.[2] ?? 0 };
+          const [roll, pitch, yaw] = device.pose.rpy ?? [0, 0, 0];
+          if (!onSite(device.parent)) answer.note = MACHINE_WORDS.onParent(String(device.parent));
+          else if (roll !== 0 || pitch !== 0) answer.note = MACHINE_WORDS.tilted;
+          else answer.placement = { xyz: device.pose.xyz, yaw: yaw ?? 0 };
         }
       }
       return text({ ...answer, joints, chains });
@@ -133,10 +158,13 @@ export function registerMachineTools(server: McpServer, hub: Hub, machines: Mach
   server.registerTool('ps_ik', {
     description: 'Joint angles of one chain of a robot that put the chain\'s tip link at a point: position only in this version (the orientation of the tip is not '
       + 'controlled). The target is in the robot base frame (the robot\'s root link; ROS metres, z up) unless placement is given: then the target is in the site '
-      + 'frame and placement is where the robot stands in it (xyz and yaw, as ps_machine_joints answers for a device of the scene). '
+      + 'frame and placement is where the robot stands in it (xyz and yaw, as ps_machine_joints answers for a device standing on the site); roll and pitch '
+      + 'are not used, and site-frame heights assume the robot\'s root link stands on the floor (the pane lifts a robot whose meshes reach below its root link). '
+      + 'Coordinates and yaw must be within 1000. '
       + 'Answers joints (the chain\'s, and any joint that follows one of them), errorM (how far the tip of those joints is from the target) and reached '
       + '(errorM within 2 mm). A target out of reach is not an error: reached is false and the joints are the closest found, within the limits. '
-      + 'seed (joint angles by name, e.g. the robot\'s current ones) is where the search starts, which keeps the answer near it.',
+      + 'seed (joint angles by name, e.g. the robot\'s current ones) is where the search starts; when the tip does not get there from the seed, a few other '
+      + 'starts are tried, and the answer may then be far from the seed.',
     inputSchema: z.object({
       ref: z.string().min(1).describe('A device id of the scene, or a product (handle/name:version, or a bare name).'),
       chain: z.string().min(1).describe('A chain name from ps_machine_joints.'),
@@ -149,6 +177,7 @@ export function registerMachineTools(server: McpServer, hub: Hub, machines: Mach
     }),
   }, async ({ ref, chain: chainName, target, seed, placement }) => {
     try {
+      if (!inRange([...target.xyz, ...(placement ? [...placement.xyz, placement.yaw ?? 0] : [])])) throw new Told(MACHINE_WORDS.outOfRange);
       const { bundle } = await robotOf(ref);
       let chain;
       try {

@@ -20,10 +20,23 @@ const fixture = (name: string): any => JSON.parse(readFileSync(join(import.meta.
 const so101 = fixture('so101-bundle.json');
 const openarm = fixture('openarm-bundle.json');
 
-/** A psbx cache with so101 and OpenArm, each with its `latest` marker and a manifest. */
+/** A robot with a floating base, a planar joint, a fixed mount and one revolute joint. */
+const rover = {
+  rootLink: 'world',
+  links: Object.fromEntries(['world', 'body', 'deck', 'mast', 'head'].map((n) => [n, { visuals: [] }])),
+  joints: [
+    { name: 'free', type: 'floating', parent: 'world', child: 'body', origin: { xyz: [0, 0, 0], rpy: [0, 0, 0] }, axis: [0, 0, 0], lower: 0, upper: 0 },
+    { name: 'drift', type: 'planar', parent: 'body', child: 'deck', origin: { xyz: [0, 0, 0.1], rpy: [0, 0, 0] }, axis: [0, 0, 1], lower: 0, upper: 0 },
+    { name: 'mount', type: 'fixed', parent: 'deck', child: 'mast', origin: { xyz: [0, 0, 0.2], rpy: [0, 0, 0] }, axis: [0, 0, 0], lower: 0, upper: 0 },
+    { name: 'pan', type: 'revolute', parent: 'mast', child: 'head', origin: { xyz: [0, 0, 0.3], rpy: [0, 0, 0] }, axis: [0, 0, 1], lower: -1, upper: 1 },
+  ],
+  chains: [],
+};
+
+/** A psbx cache with so101, OpenArm and the rover, each with its `latest` marker and a manifest. */
 function cache(): string {
   const root = mkdtempSync(join(tmpdir(), 'ps-tools-machines-cache-'));
-  for (const [name, bundle, label] of [['so101', so101, 'SO-101'], ['openarm', openarm, 'OpenArm（双腕）']] as const) {
+  for (const [name, bundle, label] of [['so101', so101, 'SO-101'], ['openarm', openarm, 'OpenArm（双腕）'], ['rover', rover, 'Rover']] as const) {
     const dir = join(root, 'catalog', 'physical-sandbox', name, '1');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'bundle.json'), JSON.stringify(bundle));
@@ -89,7 +102,7 @@ test('ps_machines_list: the robots of the cache (and catalog), narrowed by q', a
   const s = await small();
   try {
     const all = json(await call(s.client, 'ps_machines_list'));
-    assert.deepEqual(all.machines.map((m: any) => m.ref), ['physical-sandbox/openarm:1', 'physical-sandbox/so101:1']);
+    assert.deepEqual(all.machines.map((m: any) => m.ref), ['physical-sandbox/openarm:1', 'physical-sandbox/rover:1', 'physical-sandbox/so101:1']);
     assert.equal(all.offline, false);
     const some = json(await call(s.client, 'ps_machines_list', { q: '双腕' }));
     assert.deepEqual(some.machines.map((m: any) => [m.ref, m.label, m.source]), [['physical-sandbox/openarm:1', 'OpenArm（双腕）', 'cache']]);
@@ -142,8 +155,11 @@ test('ps_machine_joints: a catalog robot whose bundle has no chains takes them f
   try {
     const got = json(await call(s.client, 'ps_machine_joints', { ref: 'maker/twoarm:2' }));
     assert.deepEqual(got.chains, [{ name: 'left', baseLink: 'openarm_left_base_link', tipLink: 'openarm_left_ee_base_link', joints: openarm.chains[0].joints }]);
-    const solved = json(await call(s.client, 'ps_ik', { ref: 'maker/twoarm:2', chain: 'left', target: { xyz: [0.1, 0.3, 0.1] } }));
-    assert.equal(typeof solved.reached, 'boolean');
+    const { chains: _none, ...noChains } = openarm;
+    const twoarm = { ...noChains, profile: { chains: [{ name: 'left', baseLink: 'openarm_left_base_link', tipLink: 'openarm_left_ee_base_link', jointNames: openarm.chains[0].joints }] } };
+    const target = forward(twoarm, chainOf(twoarm, 'left'), { openarm_left_joint1: -0.8, openarm_left_joint2: -0.5, openarm_left_joint4: 1.1 }).xyz;
+    const solved = json(await call(s.client, 'ps_ik', { ref: 'maker/twoarm:2', chain: 'left', target: { xyz: target } }));
+    assert.equal(solved.reached, true, JSON.stringify(solved));
   } finally { await s.close(); }
 });
 
@@ -208,5 +224,74 @@ test('ps_machine_joints and ps_ik: an unknown robot, an unknown chain and a bad 
 
     const flat = await call(s.client, 'ps_ik', { ref: 'physical-sandbox/so101:1', chain: 'arm', target: { xyz: [0, 0] } });
     assert.equal(flat.isError, true);
+  } finally { await s.close(); }
+});
+
+test('ps_machine_joints: a device hanging on another device, or placed tilted, gets no placement and is told why', async () => {
+  const s = await small();
+  try {
+    s.hub.setScene({ devices: [
+      { id: 'cart', parent: 'site', type: 'box', pose: { xyz: [3, 0, 0], rpy: [0, 0, 0] } },
+      { id: 'arm2', product: 'physical-sandbox/so101:1', parent: 'cart', pose: { xyz: [0, 0, 0.5], rpy: [0, 0, 0.3] } },
+      { id: 'arm3', product: 'physical-sandbox/so101:1', parent: 'site', pose: { xyz: [1, 0, 0], rpy: [0.2, 0, 0.3] } },
+      { id: 'arm4', product: 'physical-sandbox/so101:1', pose: { xyz: [1, 1, 0], rpy: [0, 0, 0.3] } },
+    ] as any });
+    const onCart = json(await call(s.client, 'ps_machine_joints', { ref: 'arm2' }));
+    assert.equal(onCart.parent, 'cart');
+    assert.deepEqual(onCart.pose, { xyz: [0, 0, 0.5], rpy: [0, 0, 0.3] });
+    assert.equal(onCart.placement, undefined);
+    assert.equal(onCart.note, MACHINE_WORDS.onParent('cart'));
+    assert.match(onCart.note, /relative to cart/);
+
+    const tilted = json(await call(s.client, 'ps_machine_joints', { ref: 'arm3' }));
+    assert.equal(tilted.placement, undefined);
+    assert.equal(tilted.note, MACHINE_WORDS.tilted);
+
+    // no parent counts as standing on the site
+    const plain = json(await call(s.client, 'ps_machine_joints', { ref: 'arm4' }));
+    assert.deepEqual(plain.placement, { xyz: [1, 1, 0], yaw: 0.3 });
+    assert.equal(plain.note, undefined);
+  } finally { await s.close(); }
+});
+
+test('ps_machine_joints: floating, planar and fixed joints are not listed as movable joints', async () => {
+  const s = await small();
+  try {
+    const got = json(await call(s.client, 'ps_machine_joints', { ref: 'physical-sandbox/rover:1' }));
+    assert.deepEqual(got.joints, [{ name: 'pan', type: 'revolute', lower: -1, upper: 1 }]);
+  } finally { await s.close(); }
+});
+
+test('ps_ik: a target or placement beyond 1000 m is refused in Japanese and English, not left to overflow', async () => {
+  const s = await small();
+  try {
+    for (const args of [
+      { target: { xyz: [2000, 0, 0] } },
+      { target: { xyz: [0, 0, -1001] }, placement: { xyz: [0, 0, 0] } },
+      { target: { xyz: [1e308, 0, 0] }, placement: { xyz: [-1e308, 0, 0], yaw: 0 } },
+      { target: { xyz: [0, 0, 0] }, placement: { xyz: [0, 0, 0], yaw: 1e300 } },
+    ]) {
+      const answer = await call(s.client, 'ps_ik', { ref: 'physical-sandbox/so101:1', chain: 'arm', ...args });
+      assert.equal(answer.isError, true, JSON.stringify(args));
+      assert.equal(answer.content[0].text, MACHINE_WORDS.outOfRange, JSON.stringify(args));
+    }
+    // 1000 m itself is a target (out of reach, not refused)
+    assert.equal(json(await call(s.client, 'ps_ik', { ref: 'physical-sandbox/so101:1', chain: 'arm', target: { xyz: [1000, 0, 0] } })).reached, false);
+  } finally { await s.close(); }
+});
+
+test('the descriptions say what the site frame assumes: the root link on the floor, yaw only, the starting pose, a seed that is only a start', async () => {
+  const s = await small();
+  try {
+    const { tools } = await s.client.listTools();
+    const of = (name: string) => tools.find((t) => t.name === name)?.description ?? '';
+    for (const name of ['ps_ik', 'ps_machine_joints']) {
+      assert.match(of(name), /floor/, name);
+      assert.match(of(name), /roll and pitch/, name);
+    }
+    assert.match(of('ps_machine_joints'), /starting pose/);
+    assert.match(of('ps_machine_joints'), /parent/);
+    assert.doesNotMatch(of('ps_ik'), /keeps the answer near/);
+    assert.match(of('ps_ik'), /other starts/);
   } finally { await s.close(); }
 });
