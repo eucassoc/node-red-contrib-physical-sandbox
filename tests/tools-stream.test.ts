@@ -508,3 +508,41 @@ test('a play at speed 10 then one appended: the appended states are kept after t
     assert.deepEqual(times.slice(29, 33), [0.957, 0.99, 1.024, 1.057]);
   } finally { await s.close(); }
 });
+
+test('an MQTT recording that runs on across 保存: 上書き保存 holds the whole session, the frames agree, and the agent\'s arm is still replaced by its next attempt', { timeout: 20_000 }, async () => {
+  const s = await signedIn();
+  try {
+    const t0 = s.clock.now();
+    /** One live state of arm 1 from the broker, `k` tenths of a second into the session. */
+    const live = (k: number) => {
+      s.clock.advance(Math.max(0, t0 + k * 100 - s.clock.now()));
+      assert.ok(s.hub.push({ topic: 'ps/local/so101-1/state', payload: { at: t0 + k * 100, joints: { shoulder_pan: k / 10 } } }, 'mqtt'));
+    };
+    for (let k = 0; k < 10; k += 1) live(k);
+    json(await call(s.client, 'ps_stream_play', { messages: adjust('so101-2', 1) }));
+    s.clock.advance(1100);
+    const take1 = json(await call(s.client, 'ps_record_save', { mode: 'new', name: 'session' }));
+    assert.equal(take1.saved, true);
+    const v1 = tracesOf(s.fake.record('ada', 'session', '1'));
+    assert.equal(v1['so101-1'].length, 10);
+
+    // the broker goes on; the agent adjusts arm 2 again
+    for (let k = 21; k < 31; k += 1) live(k);
+    json(await call(s.client, 'ps_stream_play', { messages: adjust('so101-2', 2) }));
+    s.clock.advance(1100);
+    const at = s.hub.statesAt([0, 2.5, 3])!;
+    assert.deepEqual(at.states.map(jointsOf), [
+      { 'so101-1': { shoulder_pan: 0 }, 'so101-2': { shoulder_pan: 2 } },
+      { 'so101-1': { shoulder_pan: 2.5 }, 'so101-2': { shoulder_pan: 2.3 } },
+      { 'so101-1': { shoulder_pan: 3 }, 'so101-2': { shoulder_pan: 2.3 } },
+    ], 'arm 1 from the start of the session, arm 2 as adjusted after the save');
+
+    assert.equal(json(await call(s.client, 'ps_record_save', { mode: 'over' })).version, '2');
+    const v2 = tracesOf(s.fake.record('ada', 'session', '2'));
+    assert.equal(v2['so101-1'].length, 20, 'the whole session');
+    assert.deepEqual(v2['so101-1'].slice(0, 10), v1['so101-1'], 'what was saved first, then what came after');
+    assert.deepEqual(v2['so101-1'].at(-1), { t: 3, joints: { shoulder_pan: 3 } });
+    assert.deepEqual(v2['so101-2'].map((x: any) => x.joints.shoulder_pan), adjust('so101-2', 2).map((m) => m.payload.joints.shoulder_pan), 'the agent\'s attempt replaced');
+    assert.deepEqual(s.hub.statesAt([0, 2.5, 3])!.states, at.states, 'what the frames showed is what was saved');
+  } finally { await s.close(); }
+});

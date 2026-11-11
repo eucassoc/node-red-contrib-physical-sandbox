@@ -8,7 +8,7 @@
  *   otherwise, an older `at` never wins) and sent to every pane. A message for another site than
  *   the scene's moves nothing, as in the pane: it is not sent, counted, kept or saved. The stream buffer
  *   is the opened record's states on the record's own time (loaded when it is opened, and the saved
- *   record's after a save) and the live (`mqtt`) and `agent` states on their own `at`; a live state
+ *   record's after a save, but for a device that moves live: its live states stay) and the live (`mqtt`) and `agent` states on their own `at`; a live state
  *   for a device takes the place of that device's loaded states. One function, `recordNow`, says
  *   what a save would write from it: the save, the frames (`statesAt`) and the export all use it.
  *   Emptying the stream (「記録を空にする」, another site) lets the opened record's traces go too: a
@@ -179,9 +179,10 @@ export interface Hub {
   open(record: Json, opened: Opened): Scene;
   openedRecord(): Opened | null;
   /**
-   * A save reached PS.com: the saved record is the opened one, and the stream is re-based on it (its
-   * states are the loaded ones; the live and agent states are in it now). The scene and the latest
-   * states stay, so the panes do not move.
+   * A save reached PS.com: the saved record is the opened one, and the stream is re-based on it: its
+   * states are the loaded ones (the agent's are in it now, and its next attempt replaces them), while
+   * the live MQTT states stay live, so a recording that runs on is saved whole by the next 上書き保存.
+   * The scene and the latest states stay, so the panes do not move.
    */
   rebase(saved: Opened): void;
   /** Whether the scene's floor is the opened record's: the corners must then be clicked in its order. */
@@ -668,10 +669,16 @@ export function createHub(RED: any, opts: HubOptions): Hub {
   function rebase(saved: Opened): void {
     opened = saved;
     base = saved.record;
-    loaded = recordToMessages(saved.record, { site: scene.site }).messages;
-    loadedAll = loaded;
+    // The live (MQTT) states stay, so the next save holds a live device's whole session (the merge
+    // replaces its trace by all of them: nothing doubles). The agent's states are in the saved
+    // record now: they become loaded states, which its next attempt replaces. A device the agent
+    // played is loaded as a whole, its live states too (one trace has one source in the record).
+    const agentDevices = new Set(live.filter((m) => agentKept.has(m)).map((m) => deviceKey(m.topic)));
+    live = live.filter((m) => !agentKept.has(m) && !agentDevices.has(deviceKey(m.topic)));
+    const liveDevices = new Set(live.map((m) => deviceKey(m.topic)));
+    loadedAll = recordToMessages(saved.record, { site: scene.site }).messages;
+    loaded = loadedAll.filter((m) => !liveDevices.has(deviceKey(m.topic)));
     loadedKeys = new Set(loaded.map((m) => deviceKey(m.topic)));
-    live = [];
     agentKept = new WeakSet();
     droppedByAgent = new Set();
     publishStatus();
