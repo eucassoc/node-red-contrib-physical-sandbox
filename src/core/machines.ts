@@ -9,8 +9,9 @@
  *   when it holds that version, else the catalog.
  * - `fetchCatalogBundleFile`: the catalog side of the bundle route (private robots need the token).
  * - `serveBundleFile`: the path guard behind `GET /physical-sandbox/bundles/:source/*`. It names a
- *   file on disk only when it is bundle.json or a mesh/texture that bundle.json lists under assets/,
- *   and only when the real path (symlinks resolved) stays inside that bundle's folder.
+ *   file on disk only when it is bundle.json or a mesh/texture (`.bin`, `.png`, `.jpg`, `.jpeg`,
+ *   `.webp`) that bundle.json lists under assets/, and only when the real path (symlinks resolved)
+ *   stays inside that bundle's folder.
  */
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -217,7 +218,8 @@ async function catalogManifest(p: { handle: string; name: string; version: strin
   return bundle;
 }
 
-const contentTypeOf = (file: string): string => {
+/** The type a bundle file is served with: bundle.json, a picture, else bytes (a mesh). */
+export const contentTypeOf = (file: string): string => {
   const ext = file.slice(file.lastIndexOf('.') + 1).toLowerCase();
   return ({ json: 'application/json', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' } as Record<string, string>)[ext] ?? 'application/octet-stream';
 };
@@ -264,9 +266,15 @@ const inside = (root: string, real: string): boolean => real === root || real.st
 
 const real = (p: string): string | null => { try { return realpathSync(p); } catch { return null; } };
 
-/** A path as bundle.json may name it: `assets/...`, relative, no `.`/`..`/empty/backslash/NUL part. */
+/**
+ * What a bundle's assets may be: a mesh (`.bin`, robot-build.js's format) or a texture picture.
+ * Nothing else is served, so a bundle cannot have a page or a script served from Node-RED's origin.
+ */
+const ASSET_EXTENSION = /\.(bin|png|jpe?g|webp)$/i;
+
+/** A path as bundle.json may name it: `assets/...` of an ASSET_EXTENSION, relative, no `.`/`..`/empty/backslash/NUL part. */
 function assetPath(rel: unknown): string | null {
-  if (typeof rel !== 'string' || !rel.startsWith('assets/')) return null;
+  if (typeof rel !== 'string' || !rel.startsWith('assets/') || !ASSET_EXTENSION.test(rel)) return null;
   const parts = rel.split('/');
   if (parts.some((p) => p === '' || p === '.' || p === '..' || p.includes('\\') || p.includes('\0'))) return null;
   return rel;

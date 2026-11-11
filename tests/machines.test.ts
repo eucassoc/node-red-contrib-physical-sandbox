@@ -321,3 +321,25 @@ test('serveBundleFile refuses a symlink that leads out of the folder', () => {
   assert.equal(serveBundleFile('local', '0/stray/bundle.json', roots), null);
   assert.equal(serveBundleFile('local', '0/linkedjson/bundle.json', roots), null);
 });
+
+test('only meshes (.bin) and pictures (.png, .jpg, .jpeg, .webp) under assets/ are served, from a folder or the catalog', async () => {
+  const root = tmp();
+  const dir = join(root, 'arm');
+  mkdirSync(join(dir, 'assets'), { recursive: true });
+  const named = ['assets/m.bin', 'assets/t.png', 'assets/t.jpg', 'assets/t.JPEG', 'assets/t.webp', 'assets/p.html', 'assets/s.js', 'assets/v.svg', 'assets/n'];
+  writeFileSync(join(dir, 'bundle.json'), JSON.stringify({ id: 'arm', links: { base: { visuals: named.map((mesh) => ({ mesh })) } } }));
+  for (const rel of named) writeFileSync(join(dir, rel), 'x');
+  const roots = { cacheRoot: tmp(), localDirs: [root] };
+  for (const rel of named.slice(0, 5)) assert.ok(serveBundleFile('local', `0/arm/${rel}`, roots), rel);
+  for (const rel of named.slice(5)) assert.equal(serveBundleFile('local', `0/arm/${rel}`, roots), null, rel);
+
+  const catalogFetch = async (url: string) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith('/manifest')) return { ok: true, status: 200, json: async () => ({ bundle: 'bundle.json' }) };
+    const body = path.endsWith('/bundle.json') ? JSON.stringify({ links: { base: { visuals: named.map((mesh) => ({ mesh })) } } }) : 'x';
+    return { ok: true, status: 200, json: async () => JSON.parse(body), arrayBuffer: async () => new TextEncoder().encode(body).buffer };
+  };
+  const got = await fetchCatalogBundleFile('ada/arm/1', 'assets/t.webp', { catalogBase: BASE, fetchImpl: catalogFetch as any });
+  assert.equal(got?.contentType, 'image/webp');
+  assert.equal(await fetchCatalogBundleFile('ada/arm/1', 'assets/p.html', { catalogBase: BASE, fetchImpl: catalogFetch as any }), null);
+});

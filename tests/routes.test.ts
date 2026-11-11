@@ -1056,3 +1056,46 @@ test('a save over kept offline and sent later moves the opened record on: the ne
     assert.equal(fake.items.has('ada/walk-2'), false);
   } finally { await s.close(); await fake.stop(); }
 });
+
+test('bundle files go out with their own type and nosniff; a bundle naming a page or a script under assets/ gets nothing', async () => {
+  const local = tmp();
+  makeBundle(join(local, 'myarm'), 'myarm', { links: { base: { visuals: [
+    { mesh: 'assets/base.bin', texture: 'assets/skin.png' }, { mesh: 'assets/x.html' }, { mesh: 'assets/x.js' }, { texture: 'assets/x.svg' },
+  ] } } });
+  writeFileSync(join(local, 'myarm', 'assets', 'skin.png'), PNG);
+  for (const name of ['x.html', 'x.js', 'x.svg']) writeFileSync(join(local, 'myarm', 'assets', name), '<script>alert(1)</script>');
+  const cacheRoot = tmp();
+  makeBundle(join(cacheRoot, 'catalog', 'physical-sandbox', 'g1', '3'), 'g1');
+  const s = await setup({ localDirs: [local], cacheRoot });
+  try {
+    const head = async (path: string) => {
+      const res = await fetch(s.base + path);
+      await res.arrayBuffer();
+      return { status: res.status, type: res.headers.get('content-type') ?? '', sniff: res.headers.get('x-content-type-options') };
+    };
+    assert.deepEqual(await head('/physical-sandbox/bundles/local/0/myarm/assets/base.bin'), { status: 200, type: 'application/octet-stream', sniff: 'nosniff' });
+    assert.deepEqual(await head('/physical-sandbox/bundles/local/0/myarm/assets/skin.png'), { status: 200, type: 'image/png', sniff: 'nosniff' });
+    const json = await head('/physical-sandbox/bundles/local/0/myarm/bundle.json');
+    assert.deepEqual([json.status, json.type.split(';')[0], json.sniff], [200, 'application/json', 'nosniff']);
+    assert.deepEqual(await head('/physical-sandbox/bundles/cache/physical-sandbox/g1/3/assets/base.bin'), { status: 200, type: 'application/octet-stream', sniff: 'nosniff' });
+    const catalog = await head('/physical-sandbox/bundles/catalog/physical-sandbox/so101/1/assets/a.bin');
+    assert.deepEqual([catalog.status, catalog.type.split(';')[0], catalog.sniff], [200, 'application/octet-stream', 'nosniff']);
+    for (const name of ['x.html', 'x.js', 'x.svg']) {
+      assert.equal((await head(`/physical-sandbox/bundles/local/0/myarm/assets/${name}`)).status, 404, name);
+    }
+  } finally { await s.close(); }
+});
+
+test('the pane page and its files may be framed by the editor only', async () => {
+  const paneDir = tmp();
+  writeFileSync(join(paneDir, 'index.html'), '<!doctype html><title>pane</title>');
+  writeFileSync(join(paneDir, 'main.js'), 'export {}');
+  const s = await setup({ paneDir });
+  try {
+    for (const path of ['/physical-sandbox/pane', '/physical-sandbox/pane/static/main.js']) {
+      const res = await fetch(s.base + path);
+      await res.text();
+      assert.equal(res.headers.get('content-security-policy'), "frame-ancestors 'self'", path);
+    }
+  } finally { await s.close(); }
+});

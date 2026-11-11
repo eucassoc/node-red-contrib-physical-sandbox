@@ -21,7 +21,7 @@ import { isTopicName } from '../pscom/state.js';
 import { deviceStem, parseRef } from '../pscom/catalog-client.js';
 import { messagesToRecord, mergeStreamInto, type Device } from '../core/stream.js';
 import {
-  BUNDLE_ROUTE, defaultCacheRoot, fetchCatalogBundleFile, listMachines, resolveBundle, resolveListed, serveBundleFile,
+  BUNDLE_ROUTE, contentTypeOf, defaultCacheRoot, fetchCatalogBundleFile, listMachines, resolveBundle, resolveListed, serveBundleFile,
   type MachineRow, type Resolved,
 } from '../core/machines.js';
 import { Offline, Refused, SignIn, Taken } from '../core/pscom-client.js';
@@ -267,7 +267,11 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
   // The page and its code ask for no permission, as Node-RED's editor files do: they are static and
   // carry nothing of the person's, and a page loaded in an iframe or a window cannot send a token
   // (it would have to sit in the address). The page then sends the token with every data request.
-  const paneFile = { dotfiles: 'allow', headers: { 'Cache-Control': 'no-cache', 'Referrer-Policy': 'no-referrer' } };
+  // Only the editor (same origin) may frame the pane: another site cannot put it under its own page.
+  const paneFile = {
+    dotfiles: 'allow',
+    headers: { 'Cache-Control': 'no-cache', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "frame-ancestors 'self'" },
+  };
 
   app.get(`${P}/pane`, handle((req, res) => {
     const page = join(opts.paneDir, 'index.html');
@@ -464,13 +468,15 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
       const parts = rest.split('/');
       const got = parts.length >= 4 ? await catalogFile(parts.slice(0, 3).join('/'), parts.slice(3).join('/')) : null;
       if (!got) throw new Answer(404, WORDS.noProduct, 'not-found');
-      res.set('Cache-Control', 'private, max-age=86400'); // a catalog version never changes
+      res.set({ 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff' }); // a catalog version never changes
       res.type(got.contentType).send(got.bytes);
       return;
     }
     const file = serveBundleFile(source, rest, roots);
     if (!file) throw new Answer(404, WORDS.noProduct, 'not-found');
-    res.sendFile(file, { dotfiles: 'allow', headers: { 'Cache-Control': 'no-cache' } });
+    // The type of what it is (bundle.json, a picture, a mesh's bytes), never guessed by the browser
+    res.type(contentTypeOf(file));
+    res.sendFile(file, { dotfiles: 'allow', headers: { 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' } });
   }));
 
   // ---- the person's records on PS.com ----
