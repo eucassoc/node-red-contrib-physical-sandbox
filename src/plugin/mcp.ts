@@ -18,6 +18,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { version } from '../../package.json';
+import { createActions, type Actions } from './actions.js';
 import type { EditorLink } from './editor-link.js';
 import type { Hub } from './hub.js';
 import { ensureKey, keyFileIn } from './mcp-key.js';
@@ -49,6 +50,8 @@ export interface McpContext {
   link?: EditorLink;
   /** The robots: the catalog, the psbx cache and the local folders. */
   machines: MachineAccess;
+  /** What the pane's routes do to the scene, the stream and the records. */
+  actions: Actions;
 }
 
 const rpcError = (code: number, message: string) => ({ jsonrpc: '2.0', error: { code, message }, id: null });
@@ -93,7 +96,11 @@ function keyCheck(key: string): (header: unknown) => boolean {
 
 export function mountMcp(
   RED: any, hub: Hub,
-  opts: { userDir: string; link?: EditorLink; cacheRoot?: string; fetchImpl?: (url: string, init?: any) => Promise<any> },
+  opts: {
+    userDir: string; link?: EditorLink; cacheRoot?: string; fetchImpl?: (url: string, init?: any) => Promise<any>;
+    /** The routes' actions, shared (made here when not given). */
+    actions?: Actions;
+  },
 ): { newServer: () => McpServer } {
   const app = RED.httpAdmin;
   const keyFile = keyFileIn(opts.userDir);
@@ -102,11 +109,12 @@ export function mountMcp(
   const keyMatches = keyCheck(key);
   // One for every request's server: what it keeps (bundles of fixed versions) lasts
   const machines = machineAccess(hub, { cacheRoot: opts.cacheRoot, fetchImpl: opts.fetchImpl });
+  const actions = opts.actions ?? createActions(hub, { cacheRoot: opts.cacheRoot, fetchImpl: opts.fetchImpl });
 
   /** A server with every tool: one per request, as a stateless transport needs (a server holds one transport). */
   const newServer = (): McpServer => {
     const server = new McpServer({ name: 'physical-sandbox', version });
-    registerTools(server, { hub, link: opts.link, machines });
+    registerTools(server, { hub, link: opts.link, machines, actions });
     return server;
   };
 
