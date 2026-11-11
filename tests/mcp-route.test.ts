@@ -12,19 +12,22 @@ import { createHub } from '../src/plugin/hub.js';
 import { readSettings } from '../src/plugin/settings.js';
 import { mountMcp, MCP_ROUTE, MCP_BODY_LIMIT } from '../src/plugin/mcp.js';
 import { ensureKey, keyFileIn } from '../src/plugin/mcp-key.js';
+import { createEditorLink } from '../src/plugin/editor-link.js';
+import { fakeEditor } from './helpers/fake-editor.js';
 import { fakeClock, fakeRed } from './helpers/fake-red.js';
 
 const tmp = (): string => mkdtempSync(join(tmpdir(), 'ps-mcp-'));
 const UNREACHABLE = 'http://127.0.0.1:9';
 
 /** The plugin's hub and MCP route on a fake Node-RED; `X-Test-Remote` makes a request look as if it came from that address. */
-async function setup(o: { adminJsonParser?: boolean; userDir?: string; warn?: (m: string) => void } = {}) {
+async function setup(o: { adminJsonParser?: boolean; userDir?: string; warn?: (m: string) => void; link?: boolean } = {}) {
   const userDir = o.userDir ?? tmp();
   const settings = readSettings({ catalogBase: UNREACHABLE, site: 'yard' }, { userDir, env: {} });
   const red = fakeRed({ userDir, adminJsonParser: o.adminJsonParser, fakeRemote: true });
   if (o.warn) red.RED.log.warn = o.warn as any;
   const hub = createHub(red.RED, { userDir, settings, clock: fakeClock(), pollMs: 0 });
-  mountMcp(red.RED, hub, { userDir });
+  const link = o.link ? createEditorLink(red.RED, { pingMs: 50 }) : undefined;
+  mountMcp(red.RED, hub, { userDir, link });
   const base = await red.listen();
   const url = new URL(base + MCP_ROUTE);
   const key = readFileSync(join(userDir, 'physical-sandbox', 'mcp-key'), 'utf8').trim();
@@ -129,11 +132,31 @@ test('an MCP client on this machine with the key lists ps_status and gets the hu
         scene: { site: 'yard', devices: [] },
         agentFrames: true,
         unsent: 0,
+        editors: 'unknown',
+        panes: 'unknown',
       });
       // Stateless: each call is a request of its own, and two at once both answer
       const both = await Promise.all([client.callTool({ name: 'ps_status' }), client.listTools()]);
       assert.equal((both[0] as any).content[0].type, 'text');
       assert.equal(both[1].tools.length, 1);
+    } finally { await client.close(); }
+  } finally { await s.close(); }
+});
+
+test('ps_status counts the editors and panes that answer a ping on the editor link', async () => {
+  const s = await setup({ link: true });
+  try {
+    const base = s.url.origin;
+    const post = async (body: unknown) => (await fetch(`${base}/physical-sandbox/editor/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+    const editor = fakeEditor({ post });
+    const publish = s.red.RED.comms.publish;
+    s.red.RED.comms.publish = (topic: string, data: unknown, retain: boolean) => { publish(topic, data, retain); editor.deliver(topic, data); };
+    const client = await s.client();
+    try {
+      const answer: any = await client.callTool({ name: 'ps_status', arguments: {} });
+      const status = JSON.parse(answer.content[0].text);
+      assert.equal(status.editors, 1);
+      assert.equal(status.panes, 0);
     } finally { await client.close(); }
   } finally { await s.close(); }
 });

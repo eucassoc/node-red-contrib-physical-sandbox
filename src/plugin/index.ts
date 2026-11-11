@@ -1,11 +1,12 @@
 // Runtime side of the Physical Sandbox plugin: the hub (scene, stream, PS.com), its routes on the
-// admin app, the MCP route for an agent on this machine, and the plugin record through which the
-// nodes reach the hub (RED.plugins.get('physical-sandbox')?.hub).
+// admin app, the link to the open editors and panes, the MCP route for an agent on this machine,
+// and the plugin record through which the nodes reach the hub (RED.plugins.get('physical-sandbox')?.hub).
 import type { NodeAPI } from 'node-red';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createHub, type Hub } from './hub.js';
 import { registerRoutes } from './routes.js';
+import { createEditorLink } from './editor-link.js';
 import { mountMcp } from './mcp.js';
 import { readSettings, settingsOf } from './settings.js';
 
@@ -19,9 +20,10 @@ export default function physicalSandboxPlugin(RED: NodeAPI): void {
   const hub = createHub(red, { userDir, settings });
   // This file is bundled to dist/plugin/index.js; the pane is built into dist/pane
   registerRoutes(red, hub, { paneDir: join(__dirname, '..', 'pane') });
+  const link = createEditorLink(red);
   // An MCP route that cannot be mounted (the key file cannot be made) turns MCP off, not the plugin
   try {
-    mountMcp(red, hub, { userDir });
+    mountMcp(red, hub, { userDir, link });
   } catch (e) {
     red.log?.warn?.(`physical-sandbox: MCP is off: ${(e as Error)?.message ?? e}`);
   }

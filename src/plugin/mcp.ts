@@ -18,6 +18,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { version } from '../../package.json';
+import type { EditorLink } from './editor-link.js';
 import type { Hub } from './hub.js';
 import { ensureKey, keyFileIn } from './mcp-key.js';
 import { readBody, refuseTooLarge } from './routes.js';
@@ -42,6 +43,8 @@ export const MCP_WORDS = {
 /** What the tools reach. Later tools add to it. */
 export interface McpContext {
   hub: Hub;
+  /** The link to the open editors and panes; without it, who is open is 'unknown'. */
+  link?: EditorLink;
 }
 
 const rpcError = (code: number, message: string) => ({ jsonrpc: '2.0', error: { code, message }, id: null });
@@ -49,19 +52,24 @@ const text = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSO
 
 /** Every tool of the plugin, on one server. */
 export function registerTools(server: McpServer, ctx: McpContext): void {
-  const { hub } = ctx;
+  const { hub, link } = ctx;
 
   server.registerTool('ps_status', {
     description: 'The status of Physical Sandbox in this Node-RED: whether it is signed in to PS.com, the scene (its site and the ids of its devices), '
-      + 'whether the person lets agents have the pane\'s picture (agentFrames), and how many saved records are still waiting to reach PS.com (unsent).',
+      + 'whether the person lets agents have the pane\'s picture (agentFrames), how many saved records are still waiting to reach PS.com (unsent), '
+      + 'and how many Node-RED editors and Physical Sandbox panes are open in a browser (editors, panes; "unknown" when that cannot be asked). '
+      + 'Reading the flows and proposing a flow need an editor; the picture needs a pane.',
   }, async () => {
     const status = hub.status();
     const scene = hub.scene();
+    const open = link ? await link.presence() : 'unknown';
     return text({
       login: status.login,
       scene: { site: scene.site, devices: scene.devices.map((d) => d.id) },
       agentFrames: status.agentFrames,
       unsent: status.unsent.length,
+      editors: open === 'unknown' ? open : open.editors,
+      panes: open === 'unknown' ? open : open.panes,
     });
   });
 }
@@ -76,7 +84,7 @@ function keyCheck(key: string): (header: unknown) => boolean {
   };
 }
 
-export function mountMcp(RED: any, hub: Hub, opts: { userDir: string }): { newServer: () => McpServer } {
+export function mountMcp(RED: any, hub: Hub, opts: { userDir: string; link?: EditorLink }): { newServer: () => McpServer } {
   const app = RED.httpAdmin;
   const keyFile = keyFileIn(opts.userDir);
   const key = ensureKey(opts.userDir);
@@ -86,7 +94,7 @@ export function mountMcp(RED: any, hub: Hub, opts: { userDir: string }): { newSe
   /** A server with every tool: one per request, as a stateless transport needs (a server holds one transport). */
   const newServer = (): McpServer => {
     const server = new McpServer({ name: 'physical-sandbox', version });
-    registerTools(server, { hub });
+    registerTools(server, { hub, link: opts.link });
     return server;
   };
 

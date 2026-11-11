@@ -6,7 +6,8 @@
  * editor then sends its token (null without adminAuth) and the retained ones it holds. In a window of its own the pane opens Node-RED's
  * `/comms` itself, sends `{auth: token}` first when the editor has a token (Node-RED keeps it in
  * `localStorage['auth-tokens' + suffix]`), and subscribes to `ps-pane/#`, which brings the retained
- * scene, snapshot and status at once.
+ * scene, snapshot and status at once, and to `ps-editor/#`, where the plugin asks the open editors
+ * and panes (the editor forwards those to the iframe too). A pane answers `ping` and `frames`.
  *
  * Talking: the routes under `physical-sandbox/`, every POST as JSON or with `X-PS-Pane: 1`, with
  * the editor's token when it has one, always as `Authorization: Bearer`, never in an address.
@@ -15,6 +16,7 @@
 type Json = Record<string, any>;
 
 export const PANE_TOPIC = 'ps-pane/#';
+export const EDITOR_TOPIC = 'ps-editor/#';
 /** What the iframe and the editor say to each other through postMessage. */
 export const FROM_EDITOR = 'ps-pane-message';
 export const PANE_READY = 'ps-pane-ready';
@@ -25,7 +27,11 @@ export interface PaneHandlers {
   state(message: Json): void;
   snapshot(messages: Json[]): void;
   status(status: Json): void;
+  /** A request of the plugin on the editor link (src/plugin/editor-link.ts). */
+  request?(request: EditorRequest): void;
 }
+
+export interface EditorRequest { id: string; op: string; args?: unknown }
 
 /** Send one comms message to its handler; anything else is let go. */
 export function dispatch(topic: unknown, data: unknown, handlers: PaneHandlers): void {
@@ -34,6 +40,9 @@ export function dispatch(topic: unknown, data: unknown, handlers: PaneHandlers):
   else if (topic === 'ps-pane/state' && !Array.isArray(data)) handlers.state(data as Json);
   else if (topic === 'ps-pane/snapshot' && Array.isArray(data)) handlers.snapshot(data);
   else if (topic === 'ps-pane/status' && !Array.isArray(data)) handlers.status(data as Json);
+  else if (topic === 'ps-editor/request' && !Array.isArray(data) && typeof (data as Json).id === 'string' && typeof (data as Json).op === 'string') {
+    handlers.request?.(data as EditorRequest);
+  }
 }
 
 /** Node-RED's admin root from the pane's own path (`<root>physical-sandbox/pane`), ending in `/`. */
@@ -77,7 +86,11 @@ export function connectComms(opts: {
 
   const open = () => {
     socket = new Socket(opts.url);
-    const subscribe = () => { socket.send(JSON.stringify({ subscribe: PANE_TOPIC })); opts.onConnected?.(true); };
+    const subscribe = () => {
+      socket.send(JSON.stringify({ subscribe: PANE_TOPIC }));
+      socket.send(JSON.stringify({ subscribe: EDITOR_TOPIC }));
+      opts.onConnected?.(true);
+    };
     socket.onopen = () => {
       if (opts.token) socket.send(JSON.stringify({ auth: opts.token }));
       else subscribe();
@@ -176,4 +189,20 @@ export function createApi(opts: { base: string; token: () => string | null; fetc
       body: file,
     })),
   };
+}
+
+/** What a pane says to `frames` until it can hand over its picture (Task 7 of the agent tools). */
+export const PANE_FRAMES_NOT_YET = 'この右ペインはまだ映像を渡せません / This pane cannot hand over its picture yet';
+
+/**
+ * A pane's answer on the editor link: `ping` (it is open: `{kind: 'pane', page}`) and `frames`;
+ * the editor's ops are left to the editor (null). An answer that is refused (the request is over,
+ * no permission) is let go.
+ */
+export function answerEditorRequest(api: Api, request: EditorRequest, page: string): Promise<void> | null {
+  let body: Json;
+  if (request.op === 'ping') body = { id: request.id, ok: true, result: { kind: 'pane', page } };
+  else if (request.op === 'frames') body = { id: request.id, ok: false, error: PANE_FRAMES_NOT_YET };
+  else return null;
+  return api.post('editor/answer', body).then(() => undefined, () => undefined);
 }

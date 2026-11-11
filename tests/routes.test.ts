@@ -788,6 +788,11 @@ test('every sentence shown to people keeps the package\'s wording (no 直す・�
   for (const file of readdirSync(nodesDir).filter((f) => f.endsWith('.html'))) {
     for (const line of readFileSync(join(nodesDir, file), 'utf8').split('\n')) if (japanese.test(line)) sentences.push([`src/nodes/${file}`, line.trim()]);
   }
+  // and every Japanese line of the plugin's editor side
+  const pluginDir = join(import.meta.dirname, '..', 'src/plugin');
+  for (const file of readdirSync(pluginDir).filter((f) => f.endsWith('.html'))) {
+    for (const line of readFileSync(join(pluginDir, file), 'utf8').split('\n')) if (japanese.test(line)) sentences.push([`src/plugin/${file}`, line.trim()]);
+  }
   // and every Japanese line of README.ja.md
   for (const line of readFileSync(join(import.meta.dirname, '..', 'README.ja.md'), 'utf8').split('\n')) if (japanese.test(line)) sentences.push(['README.ja.md', line.trim()]);
   assert.ok(sentences.length > 30, `${sentences.length} sentences found`);

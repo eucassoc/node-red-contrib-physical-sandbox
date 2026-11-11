@@ -1,7 +1,7 @@
 // How the pane hears the hub and talks to it (src/pane/comms-client.ts).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { adminRootOf, commsUrlOf, connectComms, createApi, dispatch, listenToEditor, PaneError, tokenOf, type PaneHandlers } from '../../src/pane/comms-client.js';
+import { adminRootOf, answerEditorRequest, commsUrlOf, connectComms, createApi, dispatch, listenToEditor, PaneError, PANE_FRAMES_NOT_YET, tokenOf, type PaneHandlers } from '../../src/pane/comms-client.js';
 
 function recorder() {
   const heard: [string, any][] = [];
@@ -24,6 +24,34 @@ test('each ps-pane topic goes to its handler; anything else is let go', () => {
   dispatch('ps-pane/other', {}, handlers);
   dispatch('ps-pane/scene', null, handlers);
   assert.deepEqual(heard.map(([k]) => k), ['scene', 'state', 'snapshot', 'status']);
+});
+
+test('a request on the editor link goes to the request handler (when there is one); a cancel or a request of no shape is let go', () => {
+  const { heard, handlers } = recorder();
+  const requests: any[] = [];
+  dispatch('ps-editor/request', { id: 'r', op: 'ping', args: {} }, handlers);
+  dispatch('ps-editor/request', { id: 'r', op: 'ping', args: {} }, { ...handlers, request: (r) => requests.push(r) });
+  dispatch('ps-editor/request', { op: 'ping' }, { ...handlers, request: (r) => requests.push(r) });
+  dispatch('ps-editor/request', [], { ...handlers, request: (r) => requests.push(r) });
+  dispatch('ps-editor/cancel', { id: 'r' }, { ...handlers, request: (r) => requests.push(r) });
+  assert.deepEqual(requests, [{ id: 'r', op: 'ping', args: {} }]);
+  assert.deepEqual(heard, []);
+});
+
+test('a pane answers ping (as a pane, with its page) and frames (not yet), and leaves the editor\'s requests alone', async () => {
+  const calls: [string, any][] = [];
+  const api = createApi({ base: '/', token: () => 'T', fetchImpl: async (url: string, init: any) => { calls.push([url, JSON.parse(init.body)]); return { ok: true, json: async () => ({ taken: true }) }; } });
+  await answerEditorRequest(api, { id: 'p', op: 'ping', args: {} }, 'page-1');
+  await answerEditorRequest(api, { id: 'f', op: 'frames', args: { times: [0] } }, 'page-1');
+  assert.equal(answerEditorRequest(api, { id: 'x', op: 'flows', args: {} }, 'page-1'), null);
+  assert.equal(answerEditorRequest(api, { id: 'y', op: 'propose', args: {} }, 'page-1'), null);
+  assert.deepEqual(calls, [
+    ['/physical-sandbox/editor/answer', { id: 'p', ok: true, result: { kind: 'pane', page: 'page-1' } }],
+    ['/physical-sandbox/editor/answer', { id: 'f', ok: false, error: PANE_FRAMES_NOT_YET }],
+  ]);
+  // a refused answer (no permission, the request is over) is let go
+  const refusing = createApi({ base: '/', token: () => null, fetchImpl: async () => ({ ok: false, status: 401, json: async () => ({}) }) });
+  await answerEditorRequest(refusing, { id: 'p', op: 'ping', args: {} }, 'page-1');
 });
 
 test('the admin root, the editor\'s token and the comms address are found as Node-RED\'s editor keeps them', () => {
@@ -59,7 +87,7 @@ test('a window of its own sends the token first, subscribes once it is taken, an
   socket.onopen!();
   assert.deepEqual(socket.sent, [{ auth: 'T' }]);
   socket.onmessage!({ data: JSON.stringify({ auth: 'ok' }) });
-  assert.deepEqual(socket.sent, [{ auth: 'T' }, { subscribe: 'ps-pane/#' }]);
+  assert.deepEqual(socket.sent, [{ auth: 'T' }, { subscribe: 'ps-pane/#' }, { subscribe: 'ps-editor/#' }]);
   socket.onmessage!({ data: JSON.stringify([{ topic: 'ps-pane/scene', data: { site: 'local' } }, { topic: 'ps-pane/snapshot', data: [] }, { topic: 'debug', data: {} }]) });
   socket.onmessage!({ data: 'not json' });
   assert.deepEqual(heard.map(([k]) => k), ['scene', 'snapshot']);
@@ -72,7 +100,7 @@ test('with no token it subscribes as soon as it is open', () => {
   const { handlers } = recorder();
   const link = connectComms({ url: 'ws://x/comms', token: null, handlers, WebSocketImpl: FakeSocket });
   FakeSocket.made[0].onopen!();
-  assert.deepEqual(FakeSocket.made[0].sent, [{ subscribe: 'ps-pane/#' }]);
+  assert.deepEqual(FakeSocket.made[0].sent, [{ subscribe: 'ps-pane/#' }, { subscribe: 'ps-editor/#' }]);
   link.close();
 });
 

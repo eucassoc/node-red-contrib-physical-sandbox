@@ -3,7 +3,7 @@
  * robots, playback, saving, PS.com). The same page runs in the editor's sidebar (an iframe the
  * editor forwards the hub's messages to) and in a window of its own (which hears `/comms` itself).
  */
-import { adminRootOf, commsUrlOf, connectComms, createApi, listenToEditor, PaneError, tokenOf, type PaneHandlers } from './comms-client.js';
+import { adminRootOf, answerEditorRequest, commsUrlOf, connectComms, createApi, listenToEditor, PaneError, tokenOf, type PaneHandlers } from './comms-client.js';
 import { mountFloorUi } from './floor-ui.js';
 import { mountPlaceUi } from './place-ui.js';
 import { mountRecordsUi, type PaneStatus } from './records-ui.js';
@@ -203,6 +203,8 @@ const records = mountRecordsUi({ playRoot: playSection, saveRoot: saveSection, a
 
 let scene: PaneScene | null = null;
 let deviceIds = '';
+/** This page, for the plugin's count of open panes. */
+const page = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
 const handlers: PaneHandlers = {
   scene(next) {
@@ -227,6 +229,7 @@ const handlers: PaneHandlers = {
     for (const m of messages) stage.applyState(m as { topic: string; payload: Json });
   },
   status(status) { records.setStatus(status as PaneStatus); },
+  request(request) { void answerEditorRequest(api, request, page); },
 };
 
 // In the sidebar the editor sends its token before anything else: the robot list waits for it

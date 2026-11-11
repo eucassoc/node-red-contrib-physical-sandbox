@@ -1,6 +1,6 @@
 <script type="text/javascript">
   // Editor side of the Physical Sandbox plugin: the sidebar tab holds the pane (an iframe on
-  // physical-sandbox/pane) and forwards what the editor hears on ps-pane/# to it. The pane says
+  // physical-sandbox/pane) and forwards what the editor hears on ps-pane/# and ps-editor/# to it. The pane says
   // "ready" when it listens; the editor's token, then the retained scene, snapshot and status held here go to it, so a
   // pane loaded after the editor subscribed starts where the others are.
   (function () {
@@ -57,8 +57,79 @@
           if (RETAINED[topic]) held[topic] = data;
           post(topic, data);
         });
+        // The editor link's requests reach the pane too: it answers ping and frames (none is held)
+        RED.comms.subscribe('ps-editor/#', function (topic, data) { post(topic, data); });
         iframe.attr('src', PANE_URL);
       },
+    });
+  })();
+</script>
+<script type="text/javascript" data-ps-part="editor-link">
+  // The editor's side of the editor link (src/plugin/editor-link.ts): the plugin asks on
+  // ps-editor/request and every open editor hears it. An editor answers flows, propose and ping
+  // (a pane answers frames), by a POST to physical-sandbox/editor/answer: a relative address, so
+  // the editor's own ajax setup adds the admin root and its token, as for its own calls.
+  // A proposal is claimed first and imported only when the claim is granted, so it lands in one
+  // editor; a request whose id was cancelled (another editor answered, or the time ran out) is let go.
+  (function () {
+    var ANSWER_URL = 'physical-sandbox/editor/answer';
+    var PROPOSED = 'エージェントの提案を読み込みました。確かめてから Deploy してください';
+    var NOT_IMPORTED = 'エディタで提案を取り込めませんでした';
+    var CANCEL_KEPT_MS = 60000;
+    var page = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+    var cancelled = {};
+
+    function post(body) {
+      return $.ajax({ url: ANSWER_URL, type: 'POST', contentType: 'application/json', data: JSON.stringify(body), dataType: 'json' });
+    }
+    function answer(id, ok, value, ticket) {
+      var body = { id: id, ok: ok };
+      if (ok) body.result = value; else body.error = value;
+      if (ticket) body.ticket = ticket;
+      post(body).then(null, function () {});
+    }
+    function messageOf(e) {
+      return String((e && e.message) || e || '');
+    }
+    function importProposal(args) {
+      var nodes = args && Array.isArray(args.nodes) ? args.nodes : [];
+      var result = RED.view.importNodes(nodes, { addFlow: Boolean(args && args.newTab), generateIds: true, touchImport: true, notify: true });
+      if (!result || !result.nodeMap) throw new Error(NOT_IMPORTED);
+      RED.notify(PROPOSED, 'compact');
+      return { imported: Object.keys(result.nodeMap).length, tab: RED.workspaces.active() };
+    }
+
+    RED.comms.subscribe('ps-editor/cancel', function (topic, data) {
+      if (!data || typeof data.id !== 'string') return;
+      var now = Date.now();
+      cancelled[data.id] = now;
+      for (var id in cancelled) if (Object.prototype.hasOwnProperty.call(cancelled, id) && now - cancelled[id] > CANCEL_KEPT_MS) delete cancelled[id];
+    });
+
+    RED.comms.subscribe('ps-editor/request', function (topic, request) {
+      if (!request || typeof request.id !== 'string') return;
+      var id = request.id;
+      if (request.op === 'ping') { answer(id, true, { kind: 'editor', page: page }); return; }
+      if (Object.prototype.hasOwnProperty.call(cancelled, id)) return;
+      if (request.op === 'flows') {
+        var flows;
+        try { flows = RED.nodes.createCompleteNodeSet({ credentials: false }); } catch (e) { answer(id, false, messageOf(e)); return; }
+        answer(id, true, flows);
+      } else if (request.op === 'propose') {
+        post({ id: id, claim: true }).then(function (claim) {
+          // Granted: the cancel the plugin sends now is for the other editors
+          if (!claim || claim.granted !== true) return;
+          var result;
+          try {
+            result = importProposal(request.args);
+          } catch (e) {
+            var why = messageOf(e);
+            answer(id, false, why === NOT_IMPORTED ? why : NOT_IMPORTED + ': ' + why, claim.ticket);
+            return;
+          }
+          answer(id, true, result, claim.ticket);
+        }, function () {});
+      }
     });
   })();
 </script>

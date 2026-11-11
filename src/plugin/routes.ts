@@ -134,14 +134,14 @@ export function refuseTooLarge(req: any, res: any, error: string, body: Json = {
 }
 
 /** Only the pane writes: a JSON body, or the pane's own header (see the top of this file). */
-function fromPane(req: any, res: any, next: () => void): void {
+export function fromPane(req: any, res: any, next: () => void): void {
   const type = String(req.headers?.['content-type'] ?? '').split(';')[0].trim().toLowerCase();
   if (req.headers?.['x-ps-pane'] === '1' || type === 'application/json') { next(); return; }
   res.status(403).json({ error: WORDS.notPane, reason: 'not-pane' });
 }
 
 /** `req.body` as an object: the one Node-RED read, else read here (up to 20 MB). */
-function jsonBody(req: any, res: any, next: () => void): void {
+export function jsonBody(req: any, res: any, next: () => void): void {
   if (req._body) {
     if (!isObject(req.body)) { res.status(400).json({ error: WORDS.notJson, reason: 'not-json' }); return; }
     next();
