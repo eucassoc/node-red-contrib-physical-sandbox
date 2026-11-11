@@ -24,6 +24,7 @@ import type { Hub } from './hub.js';
 import { ensureKey, keyFileIn } from './mcp-key.js';
 import { readBody, refuseTooLarge } from './routes.js';
 import { registerFlowTools } from './tools/flows.js';
+import { registerFrameTools } from './tools/frames.js';
 import { machineAccess, registerMachineTools, type MachineAccess } from './tools/machines.js';
 import { registerStreamTools } from './tools/stream.js';
 
@@ -66,7 +67,7 @@ export function registerTools(server: McpServer, ctx: McpContext): void {
     description: 'The status of Physical Sandbox in this Node-RED: whether it is signed in to PS.com, the scene (its site and the ids of its devices), '
       + 'whether the person lets agents have the pane\'s picture (agentFrames), how many saved records are still waiting to reach PS.com (unsent), '
       + 'and how many Node-RED editors and Physical Sandbox panes are open in a browser (editors, panes; "unknown" when that cannot be asked). '
-      + 'Reading the flows and proposing a flow need an editor; the picture needs a pane.',
+      + 'Reading the flows and proposing a flow need an editor; the picture (ps_pane_frames) needs a pane and agentFrames on.',
   }, async () => {
     const status = hub.status();
     const scene = hub.scene();
@@ -84,6 +85,7 @@ export function registerTools(server: McpServer, ctx: McpContext): void {
   registerFlowTools(server, link);
   registerMachineTools(server, hub, ctx.machines);
   registerStreamTools(server, hub, ctx.actions);
+  registerFrameTools(server, hub, link);
 }
 
 /** A key compared in constant time (both sides hashed, so its length is not given away either). */

@@ -3,7 +3,7 @@
  * robots, playback, saving, PS.com). The same page runs in the editor's sidebar (an iframe the
  * editor forwards the hub's messages to) and in a window of its own (which hears `/comms` itself).
  */
-import { adminRootOf, answerEditorRequest, commsUrlOf, connectComms, createApi, listenToEditor, PaneError, tokenOf, type PaneHandlers } from './comms-client.js';
+import { adminRootOf, answerEditorRequest, commsUrlOf, connectComms, createApi, listenToEditor, PaneError, tokenOf, type FrameSource, type PaneHandlers } from './comms-client.js';
 import { mountFloorUi } from './floor-ui.js';
 import { mountPlaceUi } from './place-ui.js';
 import { mountRecordsUi, type PaneStatus } from './records-ui.js';
@@ -205,6 +205,15 @@ let scene: PaneScene | null = null;
 let deviceIds = '';
 /** This page, for the plugin's count of open panes. */
 const page = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+/**
+ * Whether this pane's switch 「エージェントに映像を渡す」 shows on (the hub's status sets it, as it
+ * sets the switch): the hub asks only while it is on, and the pane looks again before drawing.
+ */
+let sharesFrames = false;
+const frameSource: FrameSource = {
+  allowed: () => sharesFrames,
+  frame: (o) => stage.frame(o as { states?: { topic: string; payload: Json }[]; maxSide: number }),
+};
 
 const handlers: PaneHandlers = {
   scene(next) {
@@ -228,8 +237,11 @@ const handlers: PaneHandlers = {
     if (!messages.length) { stage.clearStates(); return; }
     for (const m of messages) stage.applyState(m as { topic: string; payload: Json });
   },
-  status(status) { records.setStatus(status as PaneStatus); },
-  request(request) { void answerEditorRequest(api, request, page); },
+  status(status) {
+    sharesFrames = status.agentFrames === true;
+    records.setStatus(status as PaneStatus);
+  },
+  request(request) { void answerEditorRequest(api, request, page, frameSource); },
 };
 
 // In the sidebar the editor sends its token before anything else: the robot list waits for it

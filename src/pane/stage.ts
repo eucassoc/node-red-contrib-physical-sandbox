@@ -70,8 +70,14 @@ export interface PaneStage {
   fit(): void;
   /** Size and place everything again (the canvas changed size). */
   layout(): void;
-  /** The background and the 3D in one PNG, at the picture's own size. */
-  frame(): Promise<Blob>;
+  /**
+   * The background and the 3D in one PNG, at the picture's own size, or smaller so that its
+   * longest side is `maxSide`. With `states` (the latest of each device at a stream time) those
+   * are drawn instead of what the stage shows: on the stage's own copy, put back right after the
+   * drawing (in the same task, so nothing live comes in between and nothing else sees it). A video
+   * background is drawn as it shows now.
+   */
+  frame(o?: { states?: { topic: string; payload: Json }[]; maxSide?: number }): Promise<Blob>;
   /** A point of the page as a pixel of the picture ({u, v} in its own pixels), or null off it. */
   pixelAt(clientX: number, clientY: number): { u: number; v: number } | null;
   /** A point of the page as a point on the floor, ROS [x, y] metres, or null when it misses it. */
@@ -332,11 +338,7 @@ export function createPaneStage(canvas: any, opts: StageOptions): PaneStage {
 
   function clearStates(): void {
     store.clear();
-    for (const h of held.values()) {
-      setPose(h);
-      zeroJoints(h);
-      mount(h, h.device.parent);
-    }
+    showHeld();
   }
 
   // ---- the picture and the camera ----
@@ -462,17 +464,43 @@ export function createPaneStage(canvas: any, opts: StageOptions): PaneStage {
 
   // ---- one picture of it all ----
 
-  async function frame(): Promise<Blob> {
+  /** Every device back at its pose and its joints at zero, then the states held now shown. */
+  function showHeld(): void {
+    for (const h of held.values()) {
+      setPose(h);
+      zeroJoints(h);
+      mount(h, h.device.parent);
+      showState(h);
+    }
+  }
+
+  function frame(o: { states?: { topic: string; payload: Json }[]; maxSide?: number } = {}): Promise<Blob> {
     const size = pictureSize() ?? { width: Math.round(rect.w), height: Math.round(rect.h) };
+    const scale = isNumber(o.maxSide) && o.maxSide > 0 ? Math.min(1, o.maxSide / Math.max(size.width, size.height)) : 1;
+    const width = Math.max(1, Math.round(size.width * scale));
+    const height = Math.max(1, Math.round(size.height * scale));
     const out = opts.makeCanvas ? opts.makeCanvas() : document.createElement('canvas');
-    out.width = size.width;
-    out.height = size.height;
+    out.width = width;
+    out.height = height;
     const context = out.getContext('2d');
-    if (media) context.drawImage(media, 0, 0, size.width, size.height);
-    // The 3D is drawn now and copied before anything else runs: the drawing buffer is still whole
-    renderer.render(scene, camera);
-    const ratio = renderer.getPixelRatio?.() ?? 1;
-    context.drawImage(canvas, rect.x * ratio, rect.y * ratio, rect.w * ratio, rect.h * ratio, 0, 0, size.width, size.height);
+    if (media) context.drawImage(media, 0, 0, width, height);
+    const live = o.states ? new Map(store) : null;
+    try {
+      if (o.states) {
+        clearStates();
+        for (const message of o.states) applyState(message);
+      }
+      // The 3D is drawn now and copied before anything else runs: the drawing buffer is still whole
+      renderer.render(scene, camera);
+      const ratio = renderer.getPixelRatio?.() ?? 1;
+      context.drawImage(canvas, rect.x * ratio, rect.y * ratio, rect.w * ratio, rect.h * ratio, 0, 0, width, height);
+    } finally {
+      if (live) {
+        store.clear();
+        for (const [id, held] of live) store.set(id, held);
+        showHeld();
+      }
+    }
     return new Promise((resolve, reject) => {
       out.toBlob((blob: Blob | null) => (blob ? resolve(blob) : reject(new Error('the frame could not be made'))), 'image/png');
     });
@@ -505,7 +533,7 @@ export function createPaneStage(canvas: any, opts: StageOptions): PaneStage {
 
   setBackground(null, null);
   renderer.setAnimationLoop((): void => { renderer.render(scene, camera); });
-  void now; // the clock is kept for the agent's frames (part 2)
+  void now; // not used yet (the option stays for the stages the tests make)
 
   return {
     setScene,

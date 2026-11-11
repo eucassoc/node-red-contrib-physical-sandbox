@@ -139,6 +139,12 @@ export interface Hub {
    * opened record these are all a save changes, so every other trace stays exactly as the record has it.
    */
   liveBuffer(): Message[];
+  /**
+   * The states the stream had at each of `times` (seconds from its first state, by `at`): for each
+   * time, the latest state of every topic, built up as a pane builds it (a mover's joints and place
+   * add up), as the snapshot gives them; and how long the stream is [s]. Null when it is empty.
+   */
+  statesAt(times: number[]): { states: Message[][]; duration: number } | null;
   /** Empty the stream buffer and forget the latest states (an empty snapshot goes to the panes). */
   clearStream(): void;
   status(): Status;
@@ -335,8 +341,8 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     return id !== undefined ? `device:${id}` : `topic:${topic}`;
   }
 
-  function snapshot(): Message[] {
-    return [...store.entries()].map(([topic, held]: [string, Json]) => {
+  function snapshot(of: Map<string, Json> = store): Message[] {
+    return [...of.entries()].map(([topic, held]: [string, Json]) => {
       const payload = 'xyz' in held ? { ...held, type: 'item' } : { ...held };
       return { topic, payload: payload as Message['payload'], at: held.at };
     });
@@ -437,6 +443,25 @@ export function createHub(RED: any, opts: HubOptions): Hub {
       droppedByAgent.delete(key);
     }
     loaded = loadedAll.filter((m) => loadedKeys.has(deviceKey(m.topic)));
+  }
+
+  function statesAt(times: number[]): { states: Message[][]; duration: number } | null {
+    // A stable sort: states of the same `at` stay in the order they came
+    const all = [...loaded, ...live].filter((m) => parseTopic(m.topic)?.kind === 'state').sort((a, b) => a.at - b.at);
+    if (!all.length) return null;
+    const first = all[0].at;
+    const states: Message[][] = new Array(times.length);
+    const at = newStore();
+    let next = 0;
+    for (const { t, i } of times.map((t, i) => ({ t, i })).sort((a, b) => a.t - b.t)) {
+      const until = first + t * 1000;
+      for (; next < all.length && all[next].at <= until; next += 1) {
+        const m = all[next];
+        applyState(at, { id: m.topic, type: isItemTopic(parseTopic(m.topic)!.id, m.payload) ? 'item' : 'mover' }, m.payload);
+      }
+      states[i] = snapshot(at);
+    }
+    return { states, duration: (all[all.length - 1].at - first) / 1000 };
   }
 
   /** An empty buffer and no latest states (an empty snapshot goes to the panes). */
@@ -714,6 +739,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     stop,
     streamBuffer: () => plain([...loaded, ...live]),
     liveBuffer: () => plain(live),
+    statesAt,
     clearStream,
     status,
     publishStatus,

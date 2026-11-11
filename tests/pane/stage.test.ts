@@ -294,6 +294,55 @@ test('frame() draws the picture and then the 3D into one PNG at the picture\'s s
   assert.equal(renderer.calls.render, before + 1, 'rendered right before it was copied');
 });
 
+test('frame() with maxSide makes the picture smaller so its longest side fits, keeping its shape', async () => {
+  const drawn: any[] = [];
+  const made: any = {
+    getContext: () => ({ drawImage: (...args: any[]) => drawn.push(args) }),
+    toBlob: (done: (b: Blob) => void, type: string) => done(new Blob(['png'], { type })),
+  };
+  const { stage, canvas } = makeStage({ makeCanvas: () => made });
+  const media = { style: {} };
+  stage.setBackground(media, { width: 1920, height: 1080 });
+  await stage.frame({ maxSide: 1280 });
+  assert.deepEqual([made.width, made.height], [1280, 720]);
+  assert.deepEqual(drawn[0], [media, 0, 0, 1280, 720]);
+  assert.deepEqual(drawn[1], [canvas, 0, 60, 640, 360, 0, 0, 1280, 720]);
+  // a smaller picture stays at its own size
+  stage.setBackground(media, { width: 800, height: 600 });
+  await stage.frame({ maxSide: 1280 });
+  assert.deepEqual([made.width, made.height], [800, 600]);
+});
+
+test('frame() with states draws them on the stage\'s own copy, then puts back what it showed (the live states, an item\'s parent)', async () => {
+  const made: any = { getContext: () => ({ drawImage() {} }), toBlob: (done: (b: Blob) => void, type: string) => done(new Blob(['png'], { type })) };
+  const seen: any[] = [];
+  let stage: any;
+  const renderer = { ...fakeRenderer(), render() { if (stage) seen.push({ shoulder: stage.jointOf('arm-1', 'shoulder'), arm: stage.placeOf('arm-1').position, crate: stage.scene.getObjectByName('device:crate').parent.name }); } };
+  stage = createPaneStage(fakeCanvas(), { resolveBundle: armResolve, fetchImpl: catalogFetch(), robotBuild: robotBuild as any, renderer: () => renderer, makeCanvas: () => made });
+  await stage.setScene(scene([arm({ pose: { xyz: [1, 0, 0], rpy: [0, 0, 0] } }), { id: 'crate', type: 'item', parent: 'site', pose: { xyz: [0, 0, 0.1], rpy: [0, 0, 0] } }]));
+  // live: the arm has moved and holds the crate
+  stage.applyState({ topic: 'ps/local/arm-1/state', payload: { at: 50, joints: { shoulder: 0.5 }, position: [4, 4, 0] } });
+  stage.applyState({ topic: 'ps/local/crate/state', payload: { at: 50, type: 'item', parent: 'arm-1', xyz: [0, 0, 0.3] } });
+  seen.length = 0;
+
+  // at an earlier stream time (older `at` than the live ones): only the arm's joints are known then
+  await stage.frame({ states: [{ topic: 'ps/local/arm-1/state', payload: { at: 10, joints: { shoulder: -0.3 } } }] });
+  assert.equal(seen.length, 1);
+  close(seen[0].shoulder, -0.3, 'shoulder drawn at the time');
+  assert.deepEqual(seen[0].arm, [1, 0, 0], 'no place then: the pose');
+  assert.equal(seen[0].crate, 'site', 'the crate not carried then');
+
+  close(stage.jointOf('arm-1', 'shoulder'), 0.5, 'live shoulder back');
+  assert.deepEqual(stage.placeOf('arm-1').position, [4, 4, 0]);
+  assert.equal(stage.scene.getObjectByName('device:crate').parent.name, 'device:arm-1');
+  // the live view goes on: an older state than the live one still does not win
+  assert.equal(stage.applyState({ topic: 'ps/local/arm-1/state', payload: { at: 20, joints: { shoulder: 1 } } }), false);
+  // no states: drawn as it is
+  seen.length = 0;
+  await stage.frame();
+  close(seen[0].shoulder, 0.5, 'as it is');
+});
+
 test('dispose stops the loop and lets the renderer go', () => {
   const { stage, renderer, canvas } = makeStage();
   stage.dispose();

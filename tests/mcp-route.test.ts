@@ -121,7 +121,7 @@ test('an MCP client on this machine with the key lists ps_status and gets the hu
     try {
       const { tools } = await client.listTools();
       assert.deepEqual(tools.map((t) => t.name), ['ps_status', 'ps_flows_read', 'ps_flow_propose', 'ps_machines_list', 'ps_machine_joints', 'ps_ik',
-        'ps_scene_get', 'ps_scene_place', 'ps_scene_remove', 'ps_stream_play', 'ps_stream_stop', 'ps_stream_clear', 'ps_record_inline', 'ps_record_open', 'ps_record_save']);
+        'ps_scene_get', 'ps_scene_place', 'ps_scene_remove', 'ps_stream_play', 'ps_stream_stop', 'ps_stream_clear', 'ps_record_inline', 'ps_record_open', 'ps_record_save', 'ps_pane_frames']);
       assert.ok(tools[0].description && /status/i.test(tools[0].description));
       s.hub.setAgentFrames(true);
       const answer: any = await client.callTool({ name: 'ps_status', arguments: {} });

@@ -191,18 +191,64 @@ export function createApi(opts: { base: string; token: () => string | null; fetc
   };
 }
 
-/** What a pane says to `frames` until it can hand over its picture (Task 7 of the agent tools). */
-export const PANE_FRAMES_NOT_YET = 'この右ペインはまだ映像を渡せません / This pane cannot hand over its picture yet';
+/** At most this many frames per request, each at most this many pixels on its longest side. */
+export const FRAMES_MAX = 6;
+export const FRAME_MAX_SIDE = 1280;
+
+// What a pane says when it does not give its picture (the agent passes it on to the person)
+export const PANE_FRAMES_OFF = 'この右ペインでは「エージェントに映像を渡す」が入っていません / This pane does not share frames with the agent (its switch is off)';
+export const PANE_FRAMES_BAD = `右ペインに求める映像は 1 枚から ${FRAMES_MAX} 枚までです / A pane draws 1 to ${FRAMES_MAX} frames per request`;
+export const PANE_FRAMES_FAILED = 'この右ペインでは映像を作れませんでした / This pane could not draw the frame';
 
 /**
- * A pane's answer on the editor link: `ping` (it is open: `{kind: 'pane', page}`) and `frames`;
- * the editor's ops are left to the editor (null). An answer that is refused (the request is over,
- * no permission) is let go.
+ * What draws the pane's frames: whether its switch 「エージェントに映像を渡す」 shows on now, and the
+ * stage's `frame()` (with the states of a stream time drawn on its own copy, or as it is).
  */
-export function answerEditorRequest(api: Api, request: EditorRequest, page: string): Promise<void> | null {
-  let body: Json;
-  if (request.op === 'ping') body = { id: request.id, ok: true, result: { kind: 'pane', page } };
-  else if (request.op === 'frames') body = { id: request.id, ok: false, error: PANE_FRAMES_NOT_YET };
-  else return null;
-  return api.post('editor/answer', body).then(() => undefined, () => undefined);
+export interface FrameSource {
+  allowed(): boolean;
+  frame(o: { states?: Json[]; maxSide: number }): Promise<Blob>;
+}
+
+/** A blob's bytes as base64. */
+async function base64Of(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let text = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(text);
+}
+
+/**
+ * The frames asked for (`args.frames: [{t?, states?}]`, the hub's states at each stream time; no
+ * states: the stage as it is), drawn one after another while the switch shows on: `{frames: [{png}]}`
+ * or the words of a refusal. The switch is looked at before each frame: one turned off meanwhile
+ * stops it.
+ */
+async function framesAnswer(args: unknown, source: FrameSource): Promise<{ ok: true; result: Json } | { ok: false; error: string }> {
+  if (!source.allowed()) return { ok: false, error: PANE_FRAMES_OFF };
+  const asked = (args as Json | null)?.frames;
+  if (!Array.isArray(asked) || asked.length < 1 || asked.length > FRAMES_MAX) return { ok: false, error: PANE_FRAMES_BAD };
+  const frames: { png: string }[] = [];
+  for (const one of asked) {
+    if (!source.allowed()) return { ok: false, error: PANE_FRAMES_OFF };
+    const states = Array.isArray(one?.states) ? one.states : undefined;
+    try {
+      frames.push({ png: await base64Of(await source.frame({ ...(states ? { states } : {}), maxSide: FRAME_MAX_SIDE })) });
+    } catch {
+      return { ok: false, error: PANE_FRAMES_FAILED };
+    }
+  }
+  return { ok: true, result: { frames } };
+}
+
+/**
+ * A pane's answer on the editor link: `ping` (it is open: `{kind: 'pane', page}`) and `frames`
+ * (posted as text with the pane's header: several pictures can be over Node-RED's 5 MB JSON
+ * limit); the editor's ops are left to the editor (null). An answer that is refused (the request
+ * is over, no permission) is let go.
+ */
+export function answerEditorRequest(api: Api, request: EditorRequest, page: string, source: FrameSource): Promise<void> | null {
+  const quietly = (body: Json, asText = false) => api.post('editor/answer', body, { asText }).then(() => undefined, () => undefined);
+  if (request.op === 'ping') return quietly({ id: request.id, ok: true, result: { kind: 'pane', page } });
+  if (request.op === 'frames') return framesAnswer(request.args, source).then((answer) => quietly({ id: request.id, ...answer }, true));
+  return null;
 }
