@@ -229,6 +229,7 @@ test('ps_record_save and ps_record_open follow the pane\'s rules: kept unsent si
     // signed out: kept on this machine as unsent
     let saved = json(await call(s.client, 'ps_record_save', { mode: 'new', name: 'wave', title: '手を振る' }));
     assert.deepEqual([saved.saved, saved.unsent, saved.reason], [false, 'wave', SIGN_IN]);
+    assert.deepEqual(Object.keys(saved), ['saved', 'unsent', 'reason', 'skipped', 'next'], 'the agent is told what it was told before (no pane words)');
     assert.match(saved.next, /unsent/);
     assert.deepEqual(s.hub.status().unsent, [{ name: 'wave', ref: 'wave', mode: 'new' }]);
 

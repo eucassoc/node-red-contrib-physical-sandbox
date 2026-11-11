@@ -164,7 +164,8 @@ export function registerStreamTools(server: McpServer, hub: Hub, actions: Action
     }),
   }, async (args) => {
     try {
-      const saved = await actions.save(args);
+      // The pane's words in both languages stay out: the agent is told the Japanese `reason`, as before
+      const { reasonWords: _, ...saved } = await actions.save(args) as Awaited<ReturnType<Actions['save']>> & { reasonWords?: unknown };
       return text({ ...saved, ...(saved.saved ? {} : { next: STREAM_WORDS.unsent }) });
     } catch (e) { return tell(e); }
   });

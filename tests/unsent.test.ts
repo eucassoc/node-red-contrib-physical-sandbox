@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Moved, Offline, PsComClient, Refused, SignIn, Taken, tokenFileIn } from '../src/core/pscom-client.js';
-import { keep, MOVED, OFFLINE, pending, refusalWords, removeCopy, save, sendAll, SERVER_DOWN, SIGN_IN, unsentDirIn, type Sender } from '../src/core/unsent.js';
+import { CLIENT_WORDS, filled, Moved, Offline, PsComClient, Refused, SignIn, Taken, tokenFileIn } from '../src/core/pscom-client.js';
+import { keep, MOVED, OFFLINE, pending, refusalBoth, refusalWords, removeCopy, save, sendAll, SERVER_DOWN, SIGN_IN, UNSENT_WORDS, unsentDirIn, type Sender } from '../src/core/unsent.js';
 import { FakePsCom } from './helpers/fake-pscom.js';
 
 const tmp = (): string => mkdtempSync(join(tmpdir(), 'ps-unsent-'));
@@ -146,7 +146,7 @@ test('another refusal keeps that copy with a sentence and the round goes on', as
   const sender: Sender = async (ref, rec) => {
     if (ref === 'a1') throw new Refused('limit', 429);
     if ((rec as any).equipment.devices[0].product === 'so101') {
-      throw new Refused('local-machine', 0, '手元のロボット so101 は PS.com にありません。psbx push でロボットを上げてから保存してください');
+      throw new Refused('local-machine', 0, filled(CLIENT_WORDS.localMachine, { name: 'so101' }));
     }
     return { ref: `ada/${ref}`, version: '1', unchanged: false };
   };
@@ -166,7 +166,7 @@ test('save offline keeps a copy that survives a restart and goes once PS.com ans
   await fake.stop();
   const dir = unsentDirIn(userDir);
   const out = await save(dir, client.saveRecord.bind(client), record('offline'), { ref: 'walk', mode: 'new', base: null });
-  assert.deepEqual(out, { saved: false, unsent: 'walk', reason: OFFLINE });
+  assert.deepEqual(out, { saved: false, unsent: 'walk', reason: OFFLINE, reasonWords: UNSENT_WORDS.offline });
   // Node-RED restarts: a new client on the same user directory finds the copy
   await fake.start(port);
   try {
@@ -186,7 +186,7 @@ test('save signed out keeps a copy under the bare name, sent under the handle af
     const client = new PsComClient({ base: fake.base, tokenFile: tokenFileIn(userDir), pollMs: 0 });
     const dir = unsentDirIn(userDir);
     const out = await save(dir, client.saveRecord.bind(client), record(), { ref: 'walk', mode: 'new', base: null });
-    assert.deepEqual(out, { saved: false, unsent: 'walk', reason: SIGN_IN });
+    assert.deepEqual(out, { saved: false, unsent: 'walk', reason: SIGN_IN, reasonWords: UNSENT_WORDS.signIn });
     assert.equal(SIGN_IN, 'PS.com にログインすると送れます');
     await client.loginStart();
     await client.loginPoll();
@@ -203,20 +203,24 @@ test('save on a server error keeps a copy; another refusal is thrown and keeps n
     const sender = client.saveRecord.bind(client);
     fake.failRecord = [500, { error: 'oops' }];
     assert.deepEqual(await save(dir, sender, record(), { ref: 'walk', mode: 'new', base: null }),
-      { saved: false, unsent: 'walk', reason: SERVER_DOWN });
+      { saved: false, unsent: 'walk', reason: SERVER_DOWN, reasonWords: UNSENT_WORDS.serverDown });
     fake.failRecord = [429, { error: 'limit' }];
     const err = await save(dir, sender, record(), { ref: 'run', mode: 'new', base: null }).catch((e) => e);
     assert.ok(err instanceof Refused);
     assert.equal(err.code, 'limit');
     assert.equal(err.status, 429);
     assert.equal(err.message, 'PS.com に保存できませんでした（記録の数が上限に達しています）');
+    assert.equal(err.words?.en, 'Could not save to PS.com (The number of records has reached the limit)');
     assert.deepEqual(pending(dir).map((p) => p.name), ['walk']);
   } finally { await fake.stop(); }
 });
 
 test('refusals in words: known errors, a refusal with its own sentence, anything else', () => {
   assert.equal(refusalWords(new Refused('limit', 413)), '保存できる容量の上限に達しています');
-  assert.equal(refusalWords(new Refused('not-mine', 0, 'bob/walk は ada の記録ではないため保存できません')), 'bob/walk は ada の記録ではないため保存できません');
+  const notMine = filled(CLIENT_WORDS.notMine, { ref: 'bob/walk', mine: 'ada' });
+  assert.equal(refusalWords(new Refused('not-mine', 0, notMine)), 'bob/walk は ada の記録ではないため保存できません');
+  assert.deepEqual(refusalBoth(new Refused('not-mine', 0, notMine)), { ja: 'bob/walk は ada の記録ではないため保存できません', en: 'bob/walk is not a record of ada, so it cannot be saved' });
+  assert.deepEqual(refusalBoth(new Refused('weird', 400)), { ja: 'PS.com が保存を受け付けませんでした（weird）', en: 'PS.com did not accept the save (weird)' });
   assert.equal(refusalWords(new Refused('weird', 400)), 'PS.com が保存を受け付けませんでした（weird）');
   assert.equal(refusalWords(new Refused('HTTP 413', 413)), 'PS.com が保存を受け付けませんでした（HTTP 413）');
 });
@@ -261,6 +265,7 @@ test('save of a record naming a robot only this machine has answers local-machin
     assert.deepEqual(out, {
       saved: false, unsent: 'walk', code: 'local-machine',
       reason: '手元のロボット myarm は PS.com にありません。psbx push でロボットを上げてから保存してください',
+      reasonWords: filled(CLIENT_WORDS.localMachine, { name: 'myarm' }),
     });
     assert.equal(fake.calls.length, before);
     assert.deepEqual(pending(dir).map((p) => p.name), ['walk']);

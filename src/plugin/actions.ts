@@ -13,8 +13,8 @@ import { deviceStem, parseRef } from '../pscom/catalog-client.js';
 import { isTopicName } from '../pscom/state.js';
 import type { Device } from '../core/stream.js';
 import { defaultCacheRoot, readBundleJson, type MachineRow } from '../core/machines.js';
-import { Offline, Refused, SignIn, Taken } from '../core/pscom-client.js';
-import { save, type SaveResult } from '../core/unsent.js';
+import { filled, Offline, Refused, SignIn, Taken, type Both } from '../core/pscom-client.js';
+import { refusalBoth, save, UNSENT_WORDS, type SaveResult } from '../core/unsent.js';
 import { Busy, type Hub, type Status } from './hub.js';
 
 type Json = Record<string, any>;
@@ -49,8 +49,21 @@ export const PLAIN = {
   badSite: { ja: '現地の名前が正しくありません（英数字など 1〜80 文字で、/ + # は使えません）', en: 'The site name is not valid (1–80 characters such as letters and digits; / + # are not allowed)' },
 } as const;
 
+/** One of PLAIN's Japanese sentences. */
+export type PlainJa = (typeof PLAIN)[keyof typeof PLAIN]['ja'];
+
 /** The Japanese of each (what the tools and the routes' `error` carry). */
-export const WORDS = Object.fromEntries(Object.entries(PLAIN).map(([key, both]) => [key, both.ja])) as { [K in keyof typeof PLAIN]: string };
+export const WORDS = Object.fromEntries(Object.entries(PLAIN).map(([key, both]) => [key, both.ja])) as { [K in keyof typeof PLAIN]: (typeof PLAIN)[K]['ja'] };
+
+/**
+ * PLAIN's words whose Japanese is `japanese`. A sentence that is not one of them has no English:
+ * that is a mistake here (the types keep it from happening), never shown half translated.
+ */
+export function plainOf(japanese: string): Both {
+  const both = Object.values(PLAIN).find((b) => b.ja === japanese);
+  if (!both) throw new TypeError(`no English for: ${japanese}`);
+  return both;
+}
 
 /** A catalog name (pscom-client.ts NAME). */
 export const NAME = /^[a-z0-9][a-z0-9-]{0,37}[a-z0-9]$/;
@@ -58,14 +71,17 @@ export const NAME = /^[a-z0-9][a-z0-9-]{0,37}[a-z0-9]$/;
 const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-/** An answer other than 200, with the words for the person and a reason code for the pane. */
+/**
+ * An answer other than 200, with the words for the person and a reason code for the pane. The words
+ * are one of PLAIN's (given by its Japanese) or a sentence made with both languages; the Japanese is
+ * `message`, as the agent's tools show it.
+ */
 export class Answer extends Error {
-  /** The words in both languages (the Japanese is `message`); `english` is given for words made up of one of PLAIN's. */
-  readonly words: { ja: string; en: string };
-  constructor(readonly status: number, message: string, readonly reason: string, readonly extra: Json = {}, english?: string) {
-    super(message);
-    const known = Object.values(PLAIN).find((both) => both.ja === message);
-    this.words = { ja: message, en: english ?? known?.en ?? message };
+  readonly words: Both;
+  constructor(readonly status: number, words: PlainJa | Both, readonly reason: string, readonly extra: Json = {}) {
+    const both = typeof words === 'string' ? plainOf(words) : words;
+    super(both.ja);
+    this.words = both;
   }
 }
 
@@ -262,8 +278,9 @@ export function createActions(hub: Hub, opts: ActionOptions = {}): Actions {
         hub.refreshStatus(); // a token PS.com refused is forgotten
         if (e instanceof Offline) throw new Answer(503, WORDS.offline, 'offline');
         if (e instanceof SignIn) throw new Answer(401, WORDS.signIn, 'sign-in');
-        if (e instanceof Refused && e.status === 404) throw new Answer(404, `${WORDS.notFound}（${ref}）`, 'not-found', {}, `${PLAIN.notFound.en} (${ref})`);
-        if (e instanceof Refused || e instanceof TypeError) throw new Answer(400, e instanceof Refused && e.message !== e.code ? e.message : WORDS.noRecord, e instanceof Refused ? e.code : 'bad-ref');
+        if (e instanceof Refused && e.status === 404) throw new Answer(404, { ja: `${WORDS.notFound}（${ref}）`, en: `${PLAIN.notFound.en} (${ref})` }, 'not-found');
+        // A refusal made here carries its own words (a PS.com item that is not a record, a bad name); PS.com's bare codes do not
+        if (e instanceof Refused || e instanceof TypeError) throw new Answer(400, e instanceof Refused && e.words ? e.words : PLAIN.noRecord, e instanceof Refused ? e.code : 'bad-ref');
         throw e;
       }
       const base = ref.split(':')[0];
@@ -303,8 +320,8 @@ export function createActions(hub: Hub, opts: ActionOptions = {}): Actions {
         try {
           result = await save(hub.dirs.unsent, hub.sender, record, target);
         } catch (e) {
-          if (e instanceof Taken) throw new Answer(409, e.message, 'taken');
-          if (e instanceof Refused) throw new Answer(e.status >= 400 && e.status < 500 ? e.status : 400, e.message, e.code);
+          if (e instanceof Taken) throw new Answer(409, e.words ?? filled(UNSENT_WORDS.nameTaken, { ref: target.ref }), 'taken');
+          if (e instanceof Refused) throw new Answer(e.status >= 400 && e.status < 500 ? e.status : 400, e.words ?? refusalBoth(e), e.code);
           throw e;
         } finally {
           hub.refreshStatus();

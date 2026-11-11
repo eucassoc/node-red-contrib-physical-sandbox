@@ -53,6 +53,9 @@ export interface ClientOptions {
   isLocalMachine?: (name: string) => boolean;
 }
 
+/** A sentence for the person in both languages: the pane shows one, the agent's tools the Japanese. */
+export interface Both { ja: string; en: string }
+
 /** Base class of what the client throws. */
 export class PsComError extends Error {}
 /** PS.com could not be reached (no network, refused connection, timeout). */
@@ -67,18 +70,19 @@ export class Moved extends PsComError {
   override name = 'Moved';
   constructor(readonly latest: string | null, message = `moved: the latest is ${latest}`) { super(message); }
 }
-/** A new record under a name that is already there. */
+/** A new record under a name that is already there; `words` say so to the person (the message is their Japanese). */
 export class Taken extends PsComError {
   override name = 'Taken';
-  constructor(message = 'taken') { super(message); }
+  constructor(readonly words?: Both) { super(words?.ja ?? 'taken'); }
 }
 /**
  * Any other answer: `code` is the API's `error` (or `HTTP <status>`), `status` the HTTP status (0:
- * refused here). The message is the code, or a sentence for the person when one is given.
+ * refused here). `words` are a sentence for the person when one is made here; the message is their
+ * Japanese, else the code.
  */
 export class Refused extends PsComError {
   override name = 'Refused';
-  constructor(readonly code: string, readonly status: number, message = code) { super(message); }
+  constructor(readonly code: string, readonly status: number, readonly words?: Both) { super(words?.ja ?? code); }
 }
 
 /** `<userDir>/physical-sandbox/ps-com-token.json`. */
@@ -91,9 +95,29 @@ const TIMEOUT_MS = 120_000;
 const NAME = /^[a-z0-9][a-z0-9-]{0,37}[a-z0-9]$/;
 const VERSION = /^[a-z0-9][a-z0-9.-]{0,31}$/;
 
-/** A record is saved only under the signed-in handle (as psbx push). */
-export const NOT_MINE = '{ref} は {mine} の記録ではないため保存できません';
-export const LOCAL_MACHINE = '手元のロボット {name} は PS.com にありません。psbx push でロボットを上げてから保存してください';
+/** What the client says to the person, in both languages. */
+export const CLIENT_WORDS = {
+  /** A record is saved only under the signed-in handle (as psbx push). */
+  notMine: { ja: '{ref} は {mine} の記録ではないため保存できません', en: '{ref} is not a record of {mine}, so it cannot be saved' },
+  localMachine: {
+    ja: '手元のロボット {name} は PS.com にありません。psbx push でロボットを上げてから保存してください',
+    en: 'The robot {name} on this computer is not on PS.com. Upload it with psbx push, then save',
+  },
+  noHandle: { ja: 'PS.com でハンドルを決定してから保存してください', en: 'Choose a handle on PS.com, then save' },
+  notARecord: { ja: '{ref} は記録ではありません', en: '{ref} is not a record' },
+  badName: {
+    ja: '名前は英小文字・数字・- の 2〜39 文字で、先頭と末尾は英小文字か数字にしてください',
+    en: 'A name is 2–39 of a-z, 0-9 and -, starting and ending with a letter or digit',
+  },
+} as const;
+export const NOT_MINE = CLIENT_WORDS.notMine.ja;
+export const LOCAL_MACHINE = CLIENT_WORDS.localMachine.ja;
+
+/** A sentence of both languages with `{name}`s filled in. */
+export const filled = (both: Both, params: Record<string, string>): Both => {
+  const fill = (text: string) => text.replace(/\{(\w+)\}/g, (all, key) => (Object.hasOwn(params, key) ? params[key] : all));
+  return { ja: fill(both.ja), en: fill(both.en) };
+};
 
 interface Login { deviceCode: string; startedAt: number; lastPollAt: number }
 
@@ -219,7 +243,7 @@ export class PsComClient {
     if (kept && typeof kept.handle === 'string' && kept.handle) return kept.handle;
     const body = await this.call('GET', '/api/handle', { token });
     if (typeof body?.handle !== 'string' || !body.handle) {
-      throw new Refused('no-handle', 200, 'PS.com でハンドルを決定してから保存してください');
+      throw new Refused('no-handle', 200, CLIENT_WORDS.noHandle);
     }
     const now = this.kept();
     if (now) this.writeKept({ ...now, handle: body.handle });
@@ -246,10 +270,10 @@ export class PsComClient {
     if (mode !== 'new' && mode !== 'over') throw new TypeError(`mode must be 'new' or 'over', not ${String(mode)}`);
     if (base != null && !VERSION.test(base)) throw new TypeError(`${base} is not a version`);
     const local = localProducts(record).filter((product) => this.isLocalMachine(product));
-    if (local.length) throw new Refused('local-machine', 0, LOCAL_MACHINE.replace('{name}', local.join(', ')));
+    if (local.length) throw new Refused('local-machine', 0, filled(CLIENT_WORDS.localMachine, { name: local.join(', ') }));
     const { token, handle: mine } = await this.signedIn();
     if (owner !== null && owner !== mine) {
-      throw new Refused('not-mine', 0, NOT_MINE.replace('{ref}', `${owner}/${name}`).replace('{mine}', mine));
+      throw new Refused('not-mine', 0, filled(CLIENT_WORDS.notMine, { ref: `${owner}/${name}`, mine }));
     }
     const handle = mine;
     const query = new URLSearchParams();
@@ -275,12 +299,12 @@ export class PsComClient {
     const root = `/api/catalog/${encodeURIComponent(handle)}/${encodeURIComponent(name)}`;
     const info = await this.call('GET', root, { token });
     const item = isObject(info?.item) ? info.item : {};
-    if (item.kind !== 'record') throw new Refused('not-a-record', 200, `${handle}/${name} は記録ではありません`);
+    if (item.kind !== 'record') throw new Refused('not-a-record', 200, filled(CLIENT_WORDS.notARecord, { ref: `${handle}/${name}` }));
     const latest = item.latest_version == null ? null : String(item.latest_version);
     const version = asked && asked !== 'latest' ? asked : latest;
     if (!version) throw new Refused('not-found', 404);
     const record = await this.call('GET', `${root}/${encodeURIComponent(version)}/files/record.json`, { token });
-    if (!isObject(record)) throw new Refused('not-a-record', 200, `${handle}/${name}:${version} は記録ではありません`);
+    if (!isObject(record)) throw new Refused('not-a-record', 200, filled(CLIENT_WORDS.notARecord, { ref: `${handle}/${name}:${version}` }));
     const signed = this.status();
     return { record, version, latest: latest ?? version, own: signed.signedIn && signed.handle === handle };
   }
@@ -353,7 +377,7 @@ export function isRecordRef(ref: unknown): boolean {
 function splitRef(ref: string): { handle: string | null; name: string; version: string | null } {
   const m = /^(?:([^/:]+)\/)?([^/:]+)(?::([^/:]+))?$/.exec(String(ref));
   if (!m || !NAME.test(m[2])) {
-    throw new Refused('bad-name', 0, '名前は英小文字・数字・- の 2〜39 文字で、先頭と末尾は英小文字か数字にしてください');
+    throw new Refused('bad-name', 0, CLIENT_WORDS.badName);
   }
   return { handle: m[1] ?? null, name: m[2], version: m[3] ?? null };
 }

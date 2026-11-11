@@ -18,23 +18,47 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Moved, Offline, Refused, SignIn, Taken, type SaveMode, type Saved } from './pscom-client.js';
+import { filled, Moved, Offline, Refused, SignIn, Taken, type Both, type SaveMode, type Saved } from './pscom-client.js';
 
-export const SIGN_IN = 'PS.com にログインすると送れます';
-export const OFFLINE = 'PS.com に接続できませんでした。接続できるようになったら「再送信する」を押してください';
-export const SERVER_DOWN = 'PS.com が応答できませんでした。しばらくしてから「再送信する」を押してください';
-export const MOVED = '{ref} は別の場所で変わっていたため、{new} として新しく保存しました';
-export const TAKEN = '{ref} はもうあったため、{new} として保存しました';
+/** What a save and a send say to the person, in both languages (the Japanese as psbx says it). */
+export const UNSENT_WORDS = {
+  signIn: { ja: 'PS.com にログインすると送れます', en: 'It is sent once you sign in to PS.com' },
+  offline: {
+    ja: 'PS.com に接続できませんでした。接続できるようになったら「再送信する」を押してください',
+    en: 'PS.com could not be reached. Press Send again once it can be reached',
+  },
+  serverDown: {
+    ja: 'PS.com が応答できませんでした。しばらくしてから「再送信する」を押してください',
+    en: 'PS.com could not answer. Press Send again after a while',
+  },
+  moved: { ja: '{ref} は別の場所で変わっていたため、{new} として新しく保存しました', en: '{ref} had changed elsewhere, so it was saved as a new record, {new}' },
+  taken: { ja: '{ref} はもうあったため、{new} として保存しました', en: '{ref} was there already, so it was saved as {new}' },
+  noFreeName: { ja: '{ref} の新しい名前が見つかりませんでした', en: 'No free new name was found for {ref}' },
+  nameTaken: { ja: '{ref} はもうあります。別の名前を指定してください', en: '{ref} exists already. Give another name' },
+  notSaved: { ja: 'PS.com に保存できませんでした（{words}）', en: 'Could not save to PS.com ({words})' },
+  notSent: { ja: '{name} を送れませんでした（{words}）', en: '{name} could not be sent ({words})' },
+  limitCount: { ja: '記録の数が上限に達しています', en: 'The number of records has reached the limit' },
+  limitBytes: { ja: '保存できる容量の上限に達しています', en: 'The storage limit has been reached' },
+  tooLarge: { ja: '記録が大きすぎます', en: 'The record is too large' },
+  renaming: { ja: 'ハンドルの変更中です。しばらくしてからもう一度お試しください', en: 'The handle is being changed. Try again after a while' },
+  notARecord: { ja: 'その名前は記録以外に使われています。別の名前を指定してください', en: 'That name is used by something other than a record. Give another name' },
+  notAccepted: { ja: 'PS.com が保存を受け付けませんでした（{code}）', en: 'PS.com did not accept the save ({code})' },
+} as const;
+export const SIGN_IN = UNSENT_WORDS.signIn.ja;
+export const OFFLINE = UNSENT_WORDS.offline.ja;
+export const SERVER_DOWN = UNSENT_WORDS.serverDown.ja;
+export const MOVED = UNSENT_WORDS.moved.ja;
+export const TAKEN = UNSENT_WORDS.taken.ja;
 const NAME_MAX = 39; // a catalog name is at most 39 characters
 const TRIES = 50; // suffixes tried for a free name
 
 /** What PS.com's refusals mean, by error and HTTP status, else by error alone (psbx `_REFUSALS`). */
-const REFUSALS: [code: string, status: number, words: string][] = [
-  ['limit', 429, '記録の数が上限に達しています'],
-  ['limit', 413, '保存できる容量の上限に達しています'],
-  ['too-large', 413, '記録が大きすぎます'],
-  ['renaming', 409, 'ハンドルの変更中です。しばらくしてからもう一度お試しください'],
-  ['not-a-record', 409, 'その名前は記録以外に使われています。別の名前を指定してください'],
+const REFUSALS: [code: string, status: number, words: Both][] = [
+  ['limit', 429, UNSENT_WORDS.limitCount],
+  ['limit', 413, UNSENT_WORDS.limitBytes],
+  ['too-large', 413, UNSENT_WORDS.tooLarge],
+  ['renaming', 409, UNSENT_WORDS.renaming],
+  ['not-a-record', 409, UNSENT_WORDS.notARecord],
 ];
 
 /** Sends one record (the client's `saveRecord`, bound). */
@@ -45,7 +69,7 @@ export interface SentCopy { name: string; ref: string; version: string; mode: Sa
 export interface SendAllResult { sent: SentCopy[]; left: Pending[]; notes: string[] }
 export type SaveResult =
   | { saved: true; ref: string; version: string; mode: SaveMode; unchanged: boolean; note?: string; unsentSend?: SendAllResult }
-  | { saved: false; unsent: string; reason: string; code?: string };
+  | { saved: false; unsent: string; reason: string; reasonWords: Both; code?: string };
 
 /** `<userDir>/physical-sandbox/unsent`. */
 export const unsentDirIn = (userDir: string): string => join(userDir, 'physical-sandbox', 'unsent');
@@ -54,15 +78,18 @@ export const unsentDirIn = (userDir: string): string => join(userDir, 'physical-
 export const serverDown = (e: unknown): boolean => e instanceof Refused && e.status >= 500;
 
 /**
- * A refusal said in words for the person: a known `error` in a sentence, a refusal that carries its
- * own sentence as it is, anything else 「PS.com が保存を受け付けませんでした（{code}）」.
+ * A refusal said in words for the person, in both languages: a known `error` in a sentence, a
+ * refusal made here with its own sentence as it is, anything else 「PS.com が保存を受け付けませんでした（{code}）」,
+ * where the code is PS.com's own text, passed through as it is.
  */
-export function refusalWords(e: Refused): string {
+export function refusalBoth(e: Refused): Both {
   const words = REFUSALS.find(([code, status]) => code === e.code && status === e.status)?.[2]
     ?? REFUSALS.find(([code]) => code === e.code)?.[2];
-  if (words) return words;
-  return e.message && e.message !== e.code ? e.message : `PS.com が保存を受け付けませんでした（${e.code}）`;
+  return words ?? e.words ?? filled(UNSENT_WORDS.notAccepted, { code: e.code });
 }
+
+/** The Japanese of `refusalBoth` (what the agent's tools and the notes carry). */
+export const refusalWords = (e: Refused): string => refusalBoth(e).ja;
 
 /** The name part of `handle/name[:version]` (or of a bare `name`). */
 const nameOf = (ref: string): string => ref.split('/').pop()!.split(':')[0];
@@ -162,19 +189,19 @@ function shownRef(ref: string, written: string): string {
 }
 
 /** Send `record` as new under the first free `<ref>-2`, `<ref>-3`… (a Taken answer tries the next). */
-async function underFreeName(record: object, ref: string, sender: Sender, words: string): Promise<SentOne> {
+async function underFreeName(record: object, ref: string, sender: Sender, words: Both): Promise<SentOne> {
   for (let k = 2; k < 2 + TRIES; k += 1) {
     const candidate = suffixed(ref, k);
     try {
       const saved = await sender(candidate, record, 'new', null);
-      const note = words.replace('{ref}', shownRef(ref, saved.ref)).replace('{new}', saved.ref);
+      const note = filled(words, { ref: shownRef(ref, saved.ref), new: saved.ref }).ja;
       return { ...saved, mode: 'new', note };
     } catch (e) {
       if (e instanceof Taken) continue;
       throw e;
     }
   }
-  throw new Taken(`${ref} の新しい名前が見つかりませんでした`);
+  throw new Taken(filled(UNSENT_WORDS.noFreeName, { ref }));
 }
 
 interface SentOne extends Saved { mode: SaveMode; note?: string }
@@ -192,9 +219,9 @@ async function sendOne(record: object, target: Target, sender: Sender, takenToo:
     if (e instanceof Moved) {
       const copy: Record<string, unknown> = structuredClone(record) as Record<string, unknown>;
       if (base) copy.basedOn = `${ref}:${base}`;
-      return underFreeName(copy, ref, sender, MOVED);
+      return underFreeName(copy, ref, sender, UNSENT_WORDS.moved);
     }
-    if (e instanceof Taken && mode === 'new' && takenToo) return underFreeName(record, ref, sender, TAKEN);
+    if (e instanceof Taken && mode === 'new' && takenToo) return underFreeName(record, ref, sender, UNSENT_WORDS.taken);
     throw e;
   }
 }
@@ -237,7 +264,7 @@ async function sendAllNow(dir: string, sender: Sender): Promise<SendAllResult> {
       }
       out.left.push(p);
       const words = e instanceof Refused ? refusalWords(e) : (e as Error)?.message ?? String(e);
-      out.notes.push(`${p.name} を送れませんでした（${words}）`);
+      out.notes.push(filled(UNSENT_WORDS.notSent, { name: p.name, words }).ja);
       continue;
     }
     remove(dir, p.name);
@@ -263,15 +290,19 @@ export function save(dir: string, sender: Sender, record: object, target: Target
     try {
       sent = await sendOne(record, target, sender, false);
     } catch (e) {
-      const kept = (reason: string, code?: string): SaveResult => ({
-        saved: false, unsent: keep(dir, record, target), reason, ...(code ? { code } : {}),
+      // `reason` is the Japanese (the agent's tools show it); `reasonWords` both, for the pane
+      const kept = (reason: Both, code?: string): SaveResult => ({
+        saved: false, unsent: keep(dir, record, target), reason: reason.ja, reasonWords: reason, ...(code ? { code } : {}),
       });
-      if (e instanceof SignIn) return kept(SIGN_IN);
-      if (e instanceof Offline) return kept(OFFLINE);
-      if (serverDown(e)) return kept(SERVER_DOWN);
-      if (e instanceof Refused && e.code === 'local-machine') return kept(e.message, e.code);
-      if (e instanceof Taken) throw new Taken(`${target.ref} はもうあります。別の名前を指定してください`);
-      if (e instanceof Refused) throw new Refused(e.code, e.status, `PS.com に保存できませんでした（${refusalWords(e)}）`);
+      if (e instanceof SignIn) return kept(UNSENT_WORDS.signIn);
+      if (e instanceof Offline) return kept(UNSENT_WORDS.offline);
+      if (serverDown(e)) return kept(UNSENT_WORDS.serverDown);
+      if (e instanceof Refused && e.code === 'local-machine') return kept(refusalBoth(e), e.code);
+      if (e instanceof Taken) throw new Taken(filled(UNSENT_WORDS.nameTaken, { ref: target.ref }));
+      if (e instanceof Refused) {
+        const words = refusalBoth(e);
+        throw new Refused(e.code, e.status, { ja: filled(UNSENT_WORDS.notSaved, { words: words.ja }).ja, en: filled(UNSENT_WORDS.notSaved, { words: words.en }).en });
+      }
       throw e;
     }
     const out: SaveResult = { saved: true, ref: sent.ref, version: sent.version, mode: sent.mode, unchanged: sent.unchanged };

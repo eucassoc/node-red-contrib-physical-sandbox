@@ -24,7 +24,7 @@ import {
 import { Offline, SignIn } from '../core/pscom-client.js';
 import { removeCopy } from '../core/unsent.js';
 import { Busy, type Hub } from './hub.js';
-import { Answer, createActions, NAME, PLAIN, WORDS, type Actions } from './actions.js';
+import { Answer, createActions, NAME, PLAIN, plainOf, WORDS, type Actions, type PlainJa } from './actions.js';
 
 export { WORDS };
 
@@ -99,8 +99,7 @@ export function refuseTooLarge(req: any, res: any, error: string, body: Json = {
 }
 
 /** The words of a refusal in both languages (`message: {ja, en}`), for the pane to pick one; `error` stays Japanese. */
-const wordsFor = (japanese: string): { ja: string; en: string } =>
-  Object.values(PLAIN).find((both) => both.ja === japanese) ?? { ja: japanese, en: japanese };
+const wordsFor = (japanese: string): { ja: string; en: string } => plainOf(japanese);
 
 /** Only the pane writes: a JSON body, or the pane's own header (see the top of this file). */
 export function fromPane(req: any, res: any, next: () => void): void {
@@ -259,7 +258,7 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
       ? pixels.map((p: Json) => ({ u: p.u, v: p.v })) : null;
     if (!clicks || !(finite(width) && width > 0 && finite(height) && height > 0)) throw new Answer(400, WORDS.badFloor, 'bad-floor');
     const size = { width, height };
-    const refused = (reason: unknown, mirrored = WORDS.reversed) => reason === 'mirrored'
+    const refused = (reason: unknown, mirrored: PlainJa = WORDS.reversed) => reason === 'mirrored'
       ? new Answer(422, mirrored, 'mirrored') : new Answer(422, WORDS.flat, 'flat');
     const scene = hub.scene();
 
