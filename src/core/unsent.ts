@@ -50,11 +50,15 @@ export const unsentDirIn = (userDir: string): string => join(userDir, 'physical-
 /** Whether PS.com failed on its side (HTTP 5xx): nothing was refused, the copy is kept as when offline. */
 export const serverDown = (e: unknown): boolean => e instanceof Refused && e.status >= 500;
 
-/** A refusal said in words for the person: a known `error` in a sentence, anything else as it was said. */
+/**
+ * A refusal said in words for the person: a known `error` in a sentence, a refusal that carries its
+ * own sentence as it is, anything else 「PS.com が保存を受け付けませんでした（{code}）」.
+ */
 export function refusalWords(e: Refused): string {
   const words = REFUSALS.find(([code, status]) => code === e.code && status === e.status)?.[2]
     ?? REFUSALS.find(([code]) => code === e.code)?.[2];
-  return words ?? e.message;
+  if (words) return words;
+  return e.message && e.message !== e.code ? e.message : `PS.com が保存を受け付けませんでした（${e.code}）`;
 }
 
 /** The name part of `handle/name[:version]` (or of a bare `name`). */
@@ -225,7 +229,8 @@ async function sendAllNow(dir: string, sender: Sender): Promise<SendAllResult> {
  * `ref` from `base` (the latest it had when it was opened). Signed out, offline, PS.com failing, or a
  * record naming a robot only this machine has: the record is kept (`saved: false`, with the reason in
  * words). A save over that moved meanwhile is saved as a new record with a `note`. A new record under
- * a name that is there is Taken (with a sentence), and other refusals are thrown: nothing is kept.
+ * a name that is there is Taken (with a sentence), and other refusals are thrown as Refused with
+ * 「PS.com に保存できませんでした（…）」: nothing is kept.
  * Saved, a waiting save over the same record is dropped (this one is newer) and the other kept copies
  * are sent too (`unsentSend`).
  */
@@ -243,6 +248,7 @@ export function save(dir: string, sender: Sender, record: object, target: Target
       if (serverDown(e)) return kept(SERVER_DOWN);
       if (e instanceof Refused && e.code === 'local-machine') return kept(e.message, e.code);
       if (e instanceof Taken) throw new Taken(`${target.ref} はもうあります。別の名前を指定してください`);
+      if (e instanceof Refused) throw new Refused(e.code, e.status, `PS.com に保存できませんでした（${refusalWords(e)}）`);
       throw e;
     }
     const out: SaveResult = { saved: true, ref: sent.ref, version: sent.version, mode: sent.mode, unchanged: sent.unchanged };

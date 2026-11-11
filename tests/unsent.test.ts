@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Moved, Offline, PsComClient, Refused, SignIn, Taken, tokenFileIn } from '../src/core/pscom-client.js';
-import { keep, MOVED, OFFLINE, pending, save, sendAll, SERVER_DOWN, SIGN_IN, unsentDirIn, type Sender } from '../src/core/unsent.js';
+import { keep, MOVED, OFFLINE, pending, refusalWords, save, sendAll, SERVER_DOWN, SIGN_IN, unsentDirIn, type Sender } from '../src/core/unsent.js';
 import { FakePsCom } from './helpers/fake-pscom.js';
 
 const tmp = (): string => mkdtempSync(join(tmpdir(), 'ps-unsent-'));
@@ -208,7 +208,46 @@ test('save on a server error keeps a copy; another refusal is thrown and keeps n
     const err = await save(dir, sender, record(), { ref: 'run', mode: 'new', base: null }).catch((e) => e);
     assert.ok(err instanceof Refused);
     assert.equal(err.code, 'limit');
+    assert.equal(err.status, 429);
+    assert.equal(err.message, 'PS.com に保存できませんでした（記録の数が上限に達しています）');
     assert.deepEqual(pending(dir).map((p) => p.name), ['walk']);
+  } finally { await fake.stop(); }
+});
+
+test('refusals in words: known errors, a refusal with its own sentence, anything else', () => {
+  assert.equal(refusalWords(new Refused('limit', 413)), '保存できる容量の上限に達しています');
+  assert.equal(refusalWords(new Refused('not-mine', 0, 'bob/walk は ada の記録ではないため保存できません')), 'bob/walk は ada の記録ではないため保存できません');
+  assert.equal(refusalWords(new Refused('weird', 400)), 'PS.com が保存を受け付けませんでした（weird）');
+  assert.equal(refusalWords(new Refused('HTTP 413', 413)), 'PS.com が保存を受け付けませんでした（HTTP 413）');
+});
+
+test('a copy kept for another handle is not sent: it stays listed with a sentence', async () => {
+  const userDir = tmp();
+  const { fake, sender } = await signedIn(userDir);
+  try {
+    const dir = unsentDirIn(userDir);
+    keep(dir, record('theirs'), { ref: 'bob/walk', mode: 'new', base: null });
+    const before = fake.calls.length;
+    for (let round = 0; round < 2; round += 1) {
+      const out = await sendAll(dir, sender);
+      assert.deepEqual(out.sent, []);
+      assert.deepEqual(out.left.map((p) => p.ref), ['bob/walk']);
+      assert.deepEqual(out.notes, ['walk を送れませんでした（bob/walk は ada の記録ではないため保存できません）']);
+    }
+    assert.equal(fake.calls.length, before);
+    assert.deepEqual(pending(dir).map((p) => p.ref), ['bob/walk']);
+  } finally { await fake.stop(); }
+});
+
+test('save with a bad name is thrown and keeps nothing, even for a record naming a local robot', async () => {
+  const userDir = tmp();
+  const { fake, client } = await signedIn(userDir, () => true);
+  try {
+    const dir = unsentDirIn(userDir);
+    const err = await save(dir, client.saveRecord.bind(client), record('r', 'myarm'), { ref: 'Bad Name', mode: 'new', base: null }).catch((e) => e);
+    assert.ok(err instanceof Refused);
+    assert.equal(err.code, 'bad-name');
+    assert.deepEqual(pending(dir), []);
   } finally { await fake.stop(); }
 });
 

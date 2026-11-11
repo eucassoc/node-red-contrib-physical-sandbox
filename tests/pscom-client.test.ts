@@ -212,6 +212,28 @@ test('a record naming a robot only this machine has is refused before any reques
   } finally { await fake.stop(); }
 });
 
+test('saving under another handle is refused before any request', async () => {
+  const { fake, client } = await setup();
+  try {
+    const before = fake.calls.length;
+    const err = await client.saveRecord('bob/walk', record(), 'new').catch((e) => e);
+    assert.ok(err instanceof Refused);
+    assert.deepEqual([err.code, err.status], ['not-mine', 0]);
+    assert.equal(err.message, 'bob/walk は ada の記録ではないため保存できません');
+    assert.equal(fake.calls.length, before);
+  } finally { await fake.stop(); }
+});
+
+test('the name is checked before the robots: a bad name is bad-name, not local-machine', async () => {
+  const { fake, client } = await setup({ isLocalMachine: () => true });
+  try {
+    const local = record();
+    (local.equipment.devices[0] as any).product = 'myarm';
+    const err = await client.saveRecord('Bad Name', local, 'new').catch((e) => e);
+    assert.deepEqual([err instanceof Refused, err.code], [true, 'bad-name']);
+  } finally { await fake.stop(); }
+});
+
 test('a record the PS.com app wrote (bare ids such as so101, scout) is sent unchanged', async () => {
   const { fake, client } = await setup({ isLocalMachine: (name) => name === 'myarm' });
   try {

@@ -72,7 +72,10 @@ export class Taken extends PsComError {
   override name = 'Taken';
   constructor(message = 'taken') { super(message); }
 }
-/** Any other answer: `code` is the API's `error` (or `HTTP <status>`), `status` the HTTP status (0: refused here). */
+/**
+ * Any other answer: `code` is the API's `error` (or `HTTP <status>`), `status` the HTTP status (0:
+ * refused here). The message is the code, or a sentence for the person when one is given.
+ */
 export class Refused extends PsComError {
   override name = 'Refused';
   constructor(readonly code: string, readonly status: number, message = code) { super(message); }
@@ -88,6 +91,8 @@ const TIMEOUT_MS = 120_000;
 const NAME = /^[a-z0-9][a-z0-9-]{0,37}[a-z0-9]$/;
 const VERSION = /^[a-z0-9][a-z0-9.-]{0,31}$/;
 
+/** A record is saved only under the signed-in handle (as psbx push). */
+export const NOT_MINE = '{ref} は {mine} の記録ではないため保存できません';
 export const LOCAL_MACHINE = '手元のロボット {name} は PS.com にありません。psbx push でロボットを上げてから保存してください';
 
 interface Login { deviceCode: string; startedAt: number; lastPollAt: number }
@@ -121,7 +126,7 @@ export class PsComClient {
   async loginStart(): Promise<{ userCode: string; url: string }> {
     const body = await this.call('POST', '/api/vr/start');
     if (typeof body?.deviceCode !== 'string' || typeof body?.userCode !== 'string') {
-      throw new Refused('bad-answer', 200, '/api/vr/start: unexpected answer');
+      throw new Refused('bad-answer', 200);
     }
     const now = this.now();
     this.login = { deviceCode: body.deviceCode, startedAt: now, lastPollAt: now };
@@ -225,18 +230,22 @@ export class PsComClient {
   // ---- records ----
 
   /**
-   * Save `record` to `ref` (`handle/name`, or a bare `name` under the signed-in handle): `new` as a
+   * Save `record` to `ref` (`handle/name` under the signed-in handle, else Refused `not-mine` before
+   * any request; or a bare `name`, under the signed-in handle): `new` as a
    * new record (Taken when the name is there), `over` as the next version, from `base` when given
    * (Moved when the latest is another). Always private when the item is new.
    */
   async saveRecord(ref: string, record: object, mode: SaveMode, base?: string | null): Promise<Saved> {
-    const local = localProducts(record).filter((name) => this.isLocalMachine(name));
-    if (local.length) throw new Refused('local-machine', 0, LOCAL_MACHINE.replace('{name}', local.join(', ')));
     const { handle: owner, name } = splitRef(ref);
     if (mode !== 'new' && mode !== 'over') throw new TypeError(`mode must be 'new' or 'over', not ${String(mode)}`);
     if (base != null && !VERSION.test(base)) throw new TypeError(`${base} is not a version`);
+    const local = localProducts(record).filter((product) => this.isLocalMachine(product));
+    if (local.length) throw new Refused('local-machine', 0, LOCAL_MACHINE.replace('{name}', local.join(', ')));
     const { token, handle: mine } = await this.signedIn();
-    const handle = owner ?? mine;
+    if (owner !== null && owner !== mine) {
+      throw new Refused('not-mine', 0, NOT_MINE.replace('{ref}', `${owner}/${name}`).replace('{mine}', mine));
+    }
+    const handle = mine;
     const query = new URLSearchParams();
     if (mode === 'new') query.set('new', '1');
     else if (base != null) query.set('base', base);
@@ -244,7 +253,7 @@ export class PsComClient {
     const path = `/api/catalog/${encodeURIComponent(handle)}/${encodeURIComponent(name)}/record?${query}`;
     const answer = await this.call('PUT', path, { token, body: record });
     const version = answer?.version;
-    if (typeof version !== 'string' && typeof version !== 'number') throw new Refused('bad-answer', 200, `${path}: no version in the answer`);
+    if (typeof version !== 'string' && typeof version !== 'number') throw new Refused('bad-answer', 200);
     return { ref: `${handle}/${name}`, version: String(version), unchanged: answer?.unchanged === true };
   }
 
@@ -292,7 +301,7 @@ export class PsComClient {
     let body: any = null;
     try { body = text ? JSON.parse(text) : {}; } catch { body = null; }
     if (res.ok) {
-      if (body === null) throw new Refused('bad-answer', res.status, `${path}: not JSON`);
+      if (body === null) throw new Refused('bad-answer', res.status);
       return body;
     }
     const error = isObject(body) && typeof body.error === 'string' && body.error ? body.error : `HTTP ${res.status}`;
