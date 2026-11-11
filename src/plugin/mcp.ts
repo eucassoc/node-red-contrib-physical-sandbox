@@ -22,6 +22,7 @@ import type { EditorLink } from './editor-link.js';
 import type { Hub } from './hub.js';
 import { ensureKey, keyFileIn } from './mcp-key.js';
 import { readBody, refuseTooLarge } from './routes.js';
+import { registerFlowTools } from './tools/flows.js';
 
 export const MCP_ROUTE = '/physical-sandbox/mcp';
 export const MCP_BODY_LIMIT = 5 * 1024 * 1024;
@@ -72,6 +73,8 @@ export function registerTools(server: McpServer, ctx: McpContext): void {
       panes: open === 'unknown' ? open : open.panes,
     });
   });
+
+  registerFlowTools(server, link);
 }
 
 /** A key compared in constant time (both sides hashed, so its length is not given away either). */

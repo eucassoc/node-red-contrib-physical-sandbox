@@ -775,7 +775,7 @@ test('every sentence shown to people keeps the package\'s wording (no 直す・�
     for (const [k, v] of Object.entries(mod)) if (typeof v === 'string' && japanese.test(v)) sentences.push([`${file}.${k}`, v]);
   }
   // and every Japanese string literal in the plugin's own sources (comments left out)
-  for (const dir of ['src/core', 'src/plugin', 'src/nodes', 'src/pane']) {
+  for (const dir of ['src/core', 'src/plugin', 'src/plugin/tools', 'src/nodes', 'src/pane']) {
     const root = join(import.meta.dirname, '..', dir);
     if (!existsSync(root)) continue;
     for (const file of readdirSync(root).filter((f) => f.endsWith('.ts'))) {

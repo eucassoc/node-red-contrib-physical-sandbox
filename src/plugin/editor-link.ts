@@ -13,7 +13,13 @@
  * `ps-editor/cancel {id}`, also when the time runs out. A proposal changes the workspace, so it must
  * land in one editor only: an editor first claims it (`{id, claim: true}`), only the first claim is
  * granted (with a ticket), the cancel goes out at that moment, and only the answer carrying the
- * ticket is taken. A `ping` collects every answer for a short time instead.
+ * ticket is taken; only a proposal can be claimed. A granted proposal that is never answered is
+ * not "no editor" (the editor may well have imported it): it rejects with ProposalUnanswered, which
+ * tells the agent to look at the editor before proposing again. A `ping` collects every answer for
+ * a short time instead.
+ *
+ * Editors post their answers as `text/plain` with `X-PS-Pane: 1`, read by the route itself up to
+ * 20 MB (routes.ts jsonBody): a node set over Node-RED's 5 MB JSON limit still gets through.
  */
 import { randomUUID } from 'node:crypto';
 import { realClock, type Clock } from '../core/player.js';
@@ -26,6 +32,8 @@ export const ANSWER_ROUTE = '/physical-sandbox/editor/answer';
 export const LINK_WORDS = {
   noEditor: 'Node-RED のエディタを開いてください',
   badAnswer: 'エディタからの答えの形が正しくありません',
+  proposalUnanswered: 'エディタは提案を受け取りましたが、取り込めたかどうかの答えがありませんでした。もう一度提案する前に、エディタに提案が取り込まれていないか確かめてください'
+    + ' / The editor took the proposal but did not answer whether it was imported: check the editor before proposing again',
 };
 
 export type EditorOp = 'flows' | 'propose' | 'frames' | 'ping';
@@ -33,6 +41,11 @@ export type EditorOp = 'flows' | 'propose' | 'frames' | 'ping';
 /** No editor (or pane) answered in time. */
 export class NoEditor extends Error {
   constructor(message = LINK_WORDS.noEditor) { super(message); this.name = 'NoEditor'; }
+}
+
+/** An editor was granted a proposal and then did not answer in time: it may have imported it. */
+export class ProposalUnanswered extends Error {
+  constructor(message = LINK_WORDS.proposalUnanswered) { super(message); this.name = 'ProposalUnanswered'; }
 }
 
 /** The editor (or pane) answered, but could not do it; `message` is its words. */
@@ -44,7 +57,10 @@ export class EditorRefused extends Error {
 export type Presence = { editors: number; panes: number } | 'unknown';
 
 export interface EditorLink {
-  /** The first answer of an editor or pane; rejects with NoEditor after `timeoutMs`, EditorRefused on a refusal. */
+  /**
+   * The first answer of an editor or pane; rejects with NoEditor after `timeoutMs` (ProposalUnanswered
+   * when an editor was granted the proposal), EditorRefused on a refusal.
+   */
   ask(op: Exclude<EditorOp, 'ping'>, args?: unknown, opts?: { timeoutMs?: number }): Promise<any>;
   /** How many editors and panes are open: one ping (answers for `pingMs`), its count kept for `presenceMs`. */
   presence(): Promise<Presence>;
@@ -92,7 +108,9 @@ export function createEditorLink(RED: any, opts: {
       if (pending.get(id) !== p) return;
       pending.delete(id);
       if (p.answers) { p.resolve(p.answers); return; }
-      if (!p.ticket) cancel(id); // a granted claim was already followed by the cancel
+      // a granted claim was already followed by the cancel
+      if (p.ticket) { p.reject(new ProposalUnanswered()); return; }
+      cancel(id);
       p.reject(new NoEditor());
     }, p.timeoutMs);
   }
@@ -117,7 +135,7 @@ export function createEditorLink(RED: any, opts: {
     const id = body.id as string;
     const p = pending.get(id);
     if (body.claim === true) {
-      if (!p || p.answers || p.ticket) return { granted: false };
+      if (!p || !CLAIMED.has(p.op) || p.ticket) return { granted: false };
       p.ticket = randomUUID();
       startTimer(id, p); // the granted editor is given the full time to import
       cancel(id);

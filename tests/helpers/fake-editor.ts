@@ -4,11 +4,18 @@
  *
  * - `RED.comms.subscribe` keeps the callbacks; `deliver(topic, data)` calls those whose topic
  *   matches, as the editor's comms does (`#` at the end matches the rest).
- * - `RED.nodes.createCompleteNodeSet`, `RED.view.importNodes`, `RED.notify` and
+ * - The editor holds a workspace: `nodeSet` at the start, and what is imported into it.
+ *   `RED.nodes.createCompleteNodeSet`, `RED.view.importNodes`, `RED.notify` and
  *   `RED.workspaces.active` note how they were called (as plain JSON: the script's objects come
- *   from another realm). `importNodes` gives each node a new id, as `generateIds` does.
- * - `$.ajax` notes each body sent and answers with `post(body)` (by default `{}`); a test wires it
- *   to the plugin's route with `fetch`.
+ *   from another realm). `importNodes` works as Node-RED's does on the points that matter here:
+ *   with `generateIds` each node gets a new id (its wires and tab follow), without it an id that is
+ *   already there is refused (`import_conflict`); with `addFlow` the nodes without a tab go into a
+ *   new tab, which becomes the active one; it answers `{nodeMap}` with each new node (not tabs)
+ *   under its old id and under its new one, as Node-RED's does. As with Node-RED's touch import, it
+ *   does not mark the workspace changed: `dirtyCalls` notes `RED.nodes.dirty(value)`.
+ * - `RED.nodes.getType` knows every type, or only `knownTypes` when given.
+ * - `$.ajax` notes each body sent and answers with `post(body, settings)` (by default `{}`); a test
+ *   wires it to the plugin's route with `fetch`, sending `settings` as they are.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -26,31 +33,43 @@ export function editorLinkScript(): string {
 
 const plain = (value: unknown) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
 
+/** What the editor passes to `$.ajax` for a post. */
+export interface AjaxSettings { url: string; type: string; contentType: string; headers?: Record<string, string>; data: string }
+
 export interface FakeEditor {
   deliver(topic: string, data: unknown): void;
   /** The bodies the editor posted to the answer route, in order. */
   posted: any[];
   /** The ajax settings of each post (without the body). */
-  requests: { url: string; type: string; contentType: string }[];
+  requests: { url: string; type: string; contentType: string; headers?: Record<string, string> }[];
   nodeSetCalls: any[];
   imports: { nodes: any[]; options: any }[];
   notes: { text: string; type: unknown }[];
+  dirtyCalls: unknown[];
+  /** The workspace now: the starting node set and what was imported. */
+  nodes(): any[];
 }
 
 export function fakeEditor(o: {
-  post?: (body: any) => Promise<any>;
+  post?: (body: any, settings: AjaxSettings) => Promise<any>;
   nodeSet?: any[];
   workspace?: string;
-  /** What importNodes gives back; by default `{nodeMap}` with a new id for each node. */
+  /** What importNodes gives back instead of importing. */
   importResult?: (nodes: any[]) => unknown;
+  /** The types installed in this editor; every type when not given. */
+  knownTypes?: string[];
 } = {}): FakeEditor {
   const subscriptions: { topic: string; fn: (topic: string, data: unknown) => void }[] = [];
+  const workspace: any[] = plain(o.nodeSet ?? [{ id: 'tab1', type: 'tab', label: 'Flow 1' }]);
+  let active = o.workspace ?? workspace.find((n) => n.type === 'tab')?.id ?? 'tab1';
   const editor: FakeEditor = {
     posted: [],
     requests: [],
     nodeSetCalls: [],
     imports: [],
     notes: [],
+    dirtyCalls: [],
+    nodes: () => plain(workspace),
     deliver(topic, data) {
       for (const s of subscriptions) {
         const matches = s.topic === topic || (s.topic.endsWith('/#') && topic.startsWith(s.topic.slice(0, -1)));
@@ -59,32 +78,55 @@ export function fakeEditor(o: {
     },
   };
   let nextId = 1;
+  function importInto(given: any[], options: { generateIds?: boolean; addFlow?: boolean }) {
+    const nodes: any[] = plain(given);
+    if (!options.generateIds && nodes.some((n) => workspace.some((w) => w.id === n.id))) {
+      throw Object.assign(new Error('import_conflict'), { code: 'import_conflict' });
+    }
+    const ids = new Map<string, string>(nodes.map((n) => [n.id, options.generateIds ? `new-${nextId++}` : n.id]));
+    const renamed = (id: string) => ids.get(id) ?? id;
+    let tab: string | null = null;
+    if (options.addFlow && nodes.some((n) => n.type !== 'tab' && !n.z)) {
+      tab = `new-tab-${nextId++}`;
+      workspace.push({ id: tab, type: 'tab', label: `Flow ${nextId}` });
+    }
+    const nodeMap: Record<string, { id: string }> = {};
+    for (const n of nodes) {
+      const node = { ...n, id: renamed(n.id) };
+      if (n.type !== 'tab') node.z = n.z ? renamed(n.z) : (tab ?? active);
+      if (Array.isArray(n.wires)) node.wires = n.wires.map((port: unknown) => (Array.isArray(port) ? port.map((w) => renamed(String(w))) : port));
+      workspace.push(node);
+      if (n.type !== 'tab') nodeMap[n.id] = nodeMap[node.id] = { id: node.id };
+    }
+    if (tab && !o.workspace) active = tab;
+    return { nodeMap };
+  }
   const RED = {
     comms: { subscribe: (topic: string, fn: (topic: string, data: unknown) => void) => { subscriptions.push({ topic, fn }); } },
     nodes: {
       createCompleteNodeSet(opts: unknown) {
         editor.nodeSetCalls.push(plain(opts));
-        return plain(o.nodeSet ?? [{ id: 'tab1', type: 'tab', label: 'Flow 1' }]);
+        return plain(workspace);
       },
+      dirty(value?: unknown) { editor.dirtyCalls.push(plain(value)); return value === undefined ? editor.dirtyCalls.length > 0 : undefined; },
+      getType: (type: string) => (o.knownTypes === undefined || o.knownTypes.includes(type) ? { category: 'common' } : undefined),
     },
     view: {
-      importNodes(nodes: any[], options: unknown) {
+      importNodes(nodes: any[], options: any) {
         editor.imports.push({ nodes: plain(nodes), options: plain(options) });
         if (o.importResult) return o.importResult(nodes);
-        const nodeMap: Record<string, { id: string }> = {};
-        for (const n of nodes) nodeMap[n.id] = { id: `new-${nextId++}` };
-        return { nodeMap };
+        return importInto(nodes, options ?? {});
       },
     },
     notify(text: string, type: unknown) { editor.notes.push({ text, type: plain(type) }); },
-    workspaces: { active: () => o.workspace ?? 'tab1' },
+    workspaces: { active: () => active },
   };
   const $ = {
-    ajax(settings: { url: string; type: string; contentType: string; data: string }) {
+    ajax(settings: AjaxSettings) {
       const body = JSON.parse(settings.data);
       editor.posted.push(body);
-      editor.requests.push({ url: settings.url, type: settings.type, contentType: settings.contentType });
-      return (o.post ?? (async () => ({})))(body);
+      editor.requests.push({ url: settings.url, type: settings.type, contentType: settings.contentType, ...(settings.headers ? { headers: plain(settings.headers) } : {}) });
+      return (o.post ?? (async () => ({})))(body, plain(settings));
     },
   };
   vm.runInNewContext(editorLinkScript(), { RED, $, console, setTimeout, clearTimeout }, { filename: 'editor.html#editor-link' });

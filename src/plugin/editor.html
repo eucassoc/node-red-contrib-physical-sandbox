@@ -68,7 +68,9 @@
   // The editor's side of the editor link (src/plugin/editor-link.ts): the plugin asks on
   // ps-editor/request and every open editor hears it. An editor answers flows, propose and ping
   // (a pane answers frames), by a POST to physical-sandbox/editor/answer: a relative address, so
-  // the editor's own ajax setup adds the admin root and its token, as for its own calls.
+  // the editor's own ajax setup adds the admin root and its token, as for its own calls. The body
+  // goes as text with X-PS-Pane: 1, which the route reads itself (up to 20 MB): a node set over
+  // Node-RED's 5 MB JSON limit gets through.
   // A proposal is claimed first and imported only when the claim is granted, so it lands in one
   // editor; a request whose id was cancelled (another editor answered, or the time ran out) is let go.
   (function () {
@@ -80,7 +82,7 @@
     var cancelled = {};
 
     function post(body) {
-      return $.ajax({ url: ANSWER_URL, type: 'POST', contentType: 'application/json', data: JSON.stringify(body), dataType: 'json' });
+      return $.ajax({ url: ANSWER_URL, type: 'POST', contentType: 'text/plain', headers: { 'X-PS-Pane': '1' }, data: JSON.stringify(body), dataType: 'json' });
     }
     function answer(id, ok, value, ticket) {
       var body = { id: id, ok: ok };
@@ -91,12 +93,33 @@
     function messageOf(e) {
       return String((e && e.message) || e || '');
     }
+    // The types of the proposal this editor does not have (as Node-RED's own import counts them:
+    // tabs, subflows, groups, junctions and subflow instances are not node types)
+    function notInstalled(nodes) {
+      var missing = [];
+      for (var i = 0; i < nodes.length; i++) {
+        var type = nodes[i] && nodes[i].type;
+        if (typeof type !== 'string' || missing.indexOf(type) !== -1) continue;
+        if (/^(workspace|tab|subflow|group|junction)$/.test(type) || type.indexOf('subflow:') === 0) continue;
+        if (!RED.nodes.getType(type)) missing.push(type);
+      }
+      return missing;
+    }
     function importProposal(args) {
       var nodes = args && Array.isArray(args.nodes) ? args.nodes : [];
+      var missing = notInstalled(nodes);
       var result = RED.view.importNodes(nodes, { addFlow: Boolean(args && args.newTab), generateIds: true, touchImport: true, notify: true });
       if (!result || !result.nodeMap) throw new Error(NOT_IMPORTED);
+      // A touch import leaves the nodes in place with no drag to end it, and only the end of a drag
+      // marks the workspace changed: marked here, so Deploy turns active
+      RED.nodes.dirty(true);
       RED.notify(PROPOSED, 'compact');
-      return { imported: Object.keys(result.nodeMap).length, tab: RED.workspaces.active() };
+      // nodeMap holds each new node under its old id and under its new one: count the new nodes
+      var imported = {};
+      for (var key in result.nodeMap) {
+        if (Object.prototype.hasOwnProperty.call(result.nodeMap, key) && result.nodeMap[key]) imported[result.nodeMap[key].id] = true;
+      }
+      return { imported: Object.keys(imported).length, tab: RED.workspaces.active(), notInstalled: missing };
     }
 
     RED.comms.subscribe('ps-editor/cancel', function (topic, data) {

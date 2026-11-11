@@ -12,13 +12,13 @@ import { fakeRed } from './helpers/fake-red.js';
 
 const PROPOSED = 'エージェントの提案を読み込みました。確かめてから Deploy してください';
 
-test('flows: the complete node set without credentials, posted as JSON to the answer route', async () => {
+test('flows: the complete node set without credentials, posted as text with X-PS-Pane: 1 to the answer route (Node-RED\'s 5 MB JSON parser is not in the way)', async () => {
   const editor = fakeEditor({ nodeSet: [{ id: 't', type: 'tab' }, { id: 'n', type: 'inject', z: 't' }] });
   editor.deliver('ps-editor/request', { id: 'r1', op: 'flows', args: {} });
   await settle();
   assert.deepEqual(editor.nodeSetCalls, [{ credentials: false }]);
   assert.deepEqual(editor.posted, [{ id: 'r1', ok: true, result: [{ id: 't', type: 'tab' }, { id: 'n', type: 'inject', z: 't' }] }]);
-  assert.deepEqual(editor.requests, [{ url: 'physical-sandbox/editor/answer', type: 'POST', contentType: 'application/json' }],
+  assert.deepEqual(editor.requests, [{ url: 'physical-sandbox/editor/answer', type: 'POST', contentType: 'text/plain', headers: { 'X-PS-Pane': '1' } }],
     'a relative address: the editor\'s own ajax setup adds the admin root and its token');
 });
 
@@ -32,14 +32,27 @@ test('propose: a claim first; once granted, importNodes with the exact options, 
   await settle();
   assert.deepEqual(editor.imports, [{ nodes, options: { addFlow: true, generateIds: true, touchImport: true, notify: true } }]);
   assert.deepEqual(editor.notes, [{ text: PROPOSED, type: 'compact' }]);
+  assert.deepEqual(editor.dirtyCalls, [true], 'the workspace is marked changed, so Deploy turns active');
   assert.deepEqual(editor.posted, [
     { id: 'r2', claim: true },
-    { id: 'r2', ok: true, result: { imported: 2, tab: 'new-tab' }, ticket: 'T1' },
+    { id: 'r2', ok: true, result: { imported: 2, tab: 'new-tab', notInstalled: [] }, ticket: 'T1' },
   ]);
   // without newTab it goes into the open tab
   editor.deliver('ps-editor/request', { id: 'r3', op: 'propose', args: { nodes: [{ id: 'c', type: 'debug' }] } });
   await settle();
   assert.deepEqual(editor.imports[1].options, { addFlow: false, generateIds: true, touchImport: true, notify: true });
+});
+
+test('propose: the types this editor does not have are listed in the answer (tabs, groups, junctions and subflow instances are not node types)', async () => {
+  const editor = fakeEditor({ knownTypes: ['inject', 'debug'], post: async (body) => (body.claim ? { granted: true, ticket: 'T' } : {}) });
+  const nodes = [
+    { id: 't', type: 'tab' }, { id: 'g', type: 'group', z: 't' }, { id: 'j', type: 'junction', z: 't' }, { id: 's', type: 'subflow:abc', z: 't' },
+    { id: 'a', type: 'inject', z: 't' }, { id: 'b', type: 'ps play', z: 't' }, { id: 'c', type: 'ps play', z: 't' }, { id: 'd', type: 'mqtt out', z: 't' },
+  ];
+  editor.deliver('ps-editor/request', { id: 'r6', op: 'propose', args: { nodes, newTab: true } });
+  await settle();
+  assert.equal(editor.imports.length, 1, 'imported all the same');
+  assert.deepEqual(editor.posted.at(-1).result.notInstalled, ['ps play', 'mqtt out']);
 });
 
 test('propose: not granted, nothing is imported; an import that fails is answered as a refusal', async () => {
@@ -49,6 +62,8 @@ test('propose: not granted, nothing is imported; an import that fails is answere
   assert.deepEqual(refused.imports, []);
   assert.deepEqual(refused.notes, []);
   assert.deepEqual(refused.posted, [{ id: 'r4', claim: true }]);
+
+  assert.deepEqual(refused.dirtyCalls, []);
 
   const failing = fakeEditor({ post: async (body) => (body.claim ? { granted: true, ticket: 'T' } : {}), importResult: () => undefined });
   failing.deliver('ps-editor/request', { id: 'r5', op: 'propose', args: { nodes: [{ id: 'a', type: 'inject' }] } });
@@ -113,7 +128,7 @@ test('two editors open: a proposal lands in exactly one of them, and the agent i
     const imported = editors.filter((e) => e.imports.length > 0);
     assert.equal(imported.length, 1, 'exactly one editor imported');
     assert.equal(imported[0].imports.length, 1);
-    assert.deepEqual(answer, { imported: 2, tab: imported[0] === editors[0] ? 'tab-a' : 'tab-b' });
+    assert.deepEqual(answer, { imported: 2, tab: imported[0] === editors[0] ? 'tab-a' : 'tab-b', notInstalled: [] });
     const other = editors.find((e) => e !== imported[0])!;
     assert.deepEqual(other.notes, []);
     // and flows: one answer is taken, the editors both may answer

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ANSWER_ROUTE, createEditorLink, EditorRefused, LINK_WORDS, NoEditor } from '../src/plugin/editor-link.js';
+import { ANSWER_ROUTE, createEditorLink, EditorRefused, LINK_WORDS, NoEditor, ProposalUnanswered } from '../src/plugin/editor-link.js';
 import { fakeClock, fakeRed } from './helpers/fake-red.js';
 
 async function setup(o: { timeoutMs?: number } = {}) {
@@ -98,6 +98,55 @@ test('a proposal is taken through a claim: the first editor to claim is granted,
     // a claim after the request is over is not granted
     assert.deepEqual((await s.answer({ id, claim: true })).json, { granted: false });
   } finally { await s.close(); }
+});
+
+test('only a proposal can be claimed: a claim for flows (or frames) is not granted, and its answer is still taken without one', async () => {
+  const s = await setup();
+  try {
+    const asked = s.link.ask('flows', {});
+    const { id } = s.requests()[0].data;
+    assert.deepEqual((await s.answer({ id, claim: true })).json, { granted: false });
+    assert.deepEqual(s.cancels(), [], 'a refused claim sends no cancel');
+    assert.deepEqual((await s.answer({ id, ok: true, result: [] })).json, { taken: true });
+    assert.deepEqual(await asked, []);
+    const frames = s.link.ask('frames', {});
+    assert.deepEqual((await s.answer({ id: s.requests()[1].data.id, claim: true })).json, { granted: false });
+    s.clock.advance(5000);
+    await assert.rejects(frames, NoEditor);
+  } finally { await s.close(); }
+});
+
+test('a granted proposal that is never answered is not "no editor": the agent is told the editor took it, to check before proposing again', async () => {
+  const s = await setup();
+  try {
+    const asked = s.link.ask('propose', { nodes: [{ id: 'a', type: 'inject' }] });
+    const { id } = s.requests()[0].data;
+    assert.equal((await s.answer({ id, claim: true })).json.granted, true);
+    s.clock.advance(5000);
+    await assert.rejects(asked, (e: unknown) => e instanceof ProposalUnanswered && !(e instanceof NoEditor)
+      && e.message === LINK_WORDS.proposalUnanswered && /確かめて/.test(e.message) && /check the editor before proposing again/.test(e.message));
+    assert.deepEqual(s.cancels(), [{ id }], 'the cancel went out once, at the grant; none after the time ran out');
+    assert.equal(s.clock.pending(), 0, 'no timer left behind');
+    assert.deepEqual((await s.answer({ id, ok: true, result: { imported: 1 } })).json, { taken: false }, 'a late answer is not taken');
+  } finally { await s.close(); }
+});
+
+test('an answer posted as text/plain with X-PS-Pane: 1 is read by the route itself, so a node set over Node-RED\'s 5 MB JSON limit gets through', async () => {
+  const red = fakeRed({ userDir: mkdtempSync(join(tmpdir(), 'ps-link-')), adminJsonParser: true });
+  const link = createEditorLink(red.RED, {});
+  const base = await red.listen();
+  try {
+    const big = Array.from({ length: 30_000 }, (_, i) => ({ id: `n${i}`, type: 'function', z: 't', func: 'x'.repeat(200) }));
+    const asked = link.ask('flows', {});
+    const { id } = red.published.find((p) => p.topic === 'ps-editor/request')!.data;
+    const text = JSON.stringify({ id, ok: true, result: big });
+    assert.ok(text.length > 5 * 1024 * 1024, `${text.length} bytes`);
+    const asJson = await fetch(base + ANSWER_ROUTE, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text });
+    assert.equal(asJson.status, 413, 'as JSON, Node-RED\'s own parser refuses it');
+    const res = await fetch(base + ANSWER_ROUTE, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8', 'X-PS-Pane': '1' }, body: text });
+    assert.deepEqual([res.status, await res.json()], [200, { taken: true }]);
+    assert.equal((await asked).length, 30_000);
+  } finally { await red.close(); }
 });
 
 test('the answer route asks for flows.write and the pane\'s guard, and wants an id', async () => {
