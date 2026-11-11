@@ -13,7 +13,7 @@
       "record": "PS.com の記録"
     },
     "placeholder": {
-      "ref": "handle/name:バージョン",
+      "ref": "handle/name[:バージョン]",
       "name": "名前"
     },
     "status": {

@@ -8,7 +8,7 @@ import { mountFloorUi } from './floor-ui.js';
 import { mountPlaceUi } from './place-ui.js';
 import { mountRecordsUi, type PaneStatus } from './records-ui.js';
 import { createPaneStage, type PaneScene } from './stage.js';
-import { labelOf, say as word, setLang } from './words.js';
+import { labelOf, lang, say as word, setLang } from './words.js';
 
 type Json = Record<string, any>;
 
@@ -20,6 +20,7 @@ function storage(): Storage | null {
 
 const adminRoot = adminRootOf(location.pathname);
 const inEditor = window.parent !== window;
+document.documentElement.lang = lang();
 /**
  * The editor's token (null without adminAuth). In a window of its own the pane reads it where the
  * editor keeps it (same origin); in the sidebar the editor hands it over first (see the end). It

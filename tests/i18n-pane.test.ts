@@ -217,7 +217,9 @@ test('a pane answer without both languages falls back to its error text', async 
 test('the tools keep their exact text: Japanese joined with English, as before', () => {
   assert.equal(STREAM_WORDS.nothingToPlay, '再生できるメッセージがありません / There is nothing to play');
   assert.equal(ACTION_WORDS.badName, '名前は英小文字・数字・- の 2〜39 文字で、先頭と末尾は英小文字か数字にしてください');
-  assert.equal(say('decide'), say('decide'));
+  // every Japanese line the tools use is kept in a fixture, so a changed word shows in a diff
+  const kept = JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures', 'action-words.ja.json'), 'utf8'));
+  assert.deepEqual(ACTION_WORDS, kept);
 });
 
 test('the editor\'s notice follows the editor language', async () => {
@@ -230,4 +232,36 @@ test('the editor\'s notice follows the editor language', async () => {
   assert.match(ja.notes[0].text, japanese);
   assert.doesNotMatch(en.notes[0].text, japanese);
   assert.match(en.notes[0].text, /Deploy/);
+});
+
+test('the floor prompt and its note follow a language change; the page language follows too', () => {
+  const dom = new JSDOM('<!doctype html><html lang="ja"><body></body></html>');
+  const keep = { document: (globalThis as any).document, window: (globalThis as any).window };
+  Object.assign(globalThis, { document: dom.window.document, window: dom.window });
+  try {
+    setLang('ja');
+    assert.equal(dom.window.document.documentElement.lang, 'ja');
+    const root = dom.window.document.createElement('section');
+    dom.window.document.body.append(root);
+    const overlay = dom.window.document.createElementNS('http://www.w3.org/2000/svg', 'svg') as unknown as SVGSVGElement;
+    const floor = mountFloorUi({ root, overlay, api: fakeApi(), pixelAt: (x, y) => ({ u: x, v: y }), pictureSize: () => ({ width: 100, height: 100 }) });
+    const prompt = () => root.querySelector('.ps-prompt')!.textContent;
+    (root.querySelector('[data-word="decideFloor"]') as HTMLElement).click();
+    assert.equal(prompt(), WORDS.cornerNext.ja.replace('{n}', '1'));
+    setLang('en');
+    assert.equal(prompt(), WORDS.cornerNext.en.replace('{n}', '1'));
+    assert.equal(dom.window.document.documentElement.lang, 'en');
+    // a note made from a word is said again too
+    for (const at of [[1, 1], [9, 1], [9, 9], [1, 9]]) floor.click(at[0], at[1]);
+    (root.querySelector('[data-word="decide"]') as HTMLElement).click();
+    assert.equal(prompt(), WORDS.badLength.en);
+    setLang('ja');
+    assert.equal(prompt(), WORDS.badLength.ja);
+    setLang(null);
+  } finally {
+    setLang(null);
+    forgetLangListeners();
+    dom.window.close();
+    for (const [name, was] of Object.entries(keep)) { if (was === undefined) delete (globalThis as any)[name]; else (globalThis as any)[name] = was; }
+  }
 });

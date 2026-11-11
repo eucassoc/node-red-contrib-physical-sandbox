@@ -140,6 +140,7 @@ export function setLang(value: unknown): void {
   const next = value === null || value === undefined ? null : langOf(value);
   if (next === posted) return;
   posted = next;
+  if (typeof document !== 'undefined') document.documentElement.lang = lang();
   for (const ref of tracked) {
     const element = ref.deref();
     const word = element && written.get(element);

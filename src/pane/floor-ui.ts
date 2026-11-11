@@ -8,14 +8,19 @@
 import type { Api } from './comms-client.js';
 import { PaneError } from './comms-client.js';
 import { buttonOf, labelOf, onLang, say as word } from './words.js';
+import type { WordKey } from './words.js';
 
 export interface Pixel { u: number; v: number }
 
+/** A note made from a word key keeps the key and its parameters, so it can be said again in another language. */
+export interface NoteWord { key: WordKey; params?: Record<string, unknown> }
+interface Noted { note: string | null; noteWord?: NoteWord }
+
 export type FloorState =
-  | { step: 'idle'; note: string | null }
-  | { step: 'corners'; corners: Pixel[]; edges: [string, string]; note: string | null }
-  | { step: 'lengths'; corners: Pixel[]; edges: [string, string]; note: string | null }
-  | { step: 'deciding'; corners: Pixel[]; edges: [string, string]; note: string | null };
+  | ({ step: 'idle' } & Noted)
+  | ({ step: 'corners'; corners: Pixel[]; edges: [string, string] } & Noted)
+  | ({ step: 'lengths'; corners: Pixel[]; edges: [string, string] } & Noted)
+  | ({ step: 'deciding'; corners: Pixel[]; edges: [string, string] } & Noted);
 
 export type FloorAction =
   | { type: 'start'; edges?: [number, number] | null }
@@ -61,11 +66,13 @@ export function floorStep(state: FloorState, action: FloorAction): FloorState {
     }
     case 'decide': {
       if (state.step !== 'lengths') return state;
-      if (lengthOf(state.edges[0]) === null || lengthOf(state.edges[1]) === null) return { ...state, note: word('badLength') };
-      return { ...state, step: 'deciding', note: null };
+      if (lengthOf(state.edges[0]) === null || lengthOf(state.edges[1]) === null) return { ...state, note: word('badLength'), noteWord: { key: 'badLength' } };
+      return { ...state, step: 'deciding', note: null, noteWord: undefined };
     }
-    case 'answered':
-      return { step: 'idle', note: word('floorDecided', { a: shown(action.edgesM[0]), b: shown(action.edgesM[1]) }) };
+    case 'answered': {
+      const params = { a: shown(action.edgesM[0]), b: shown(action.edgesM[1]) };
+      return { step: 'idle', note: word('floorDecided', params), noteWord: { key: 'floorDecided', params } };
+    }
     case 'refused':
       // Clicked the wrong way round, or too flat: the corners again, keeping the lengths
       return state.step === 'idle' ? state : { step: 'corners', corners: [], edges: state.edges, note: action.note };
@@ -186,7 +193,7 @@ export function mountFloorUi(opts: {
       const { edges } = state;
       inputs.forEach((input, i) => { if (input.value !== edges[i]) input.value = edges[i]; });
     }
-    show(state.note ?? floorPrompt(state));
+    show(state.noteWord ? word(state.noteWord.key, state.noteWord.params) : state.note ?? floorPrompt(state));
     drawMarks();
   }
 
@@ -221,6 +228,8 @@ export function mountFloorUi(opts: {
   }
 
   draw();
+  // The prompt and the note are text set once: say them again in the new language
+  onLang(draw);
 
   return {
     click(clientX, clientY) {
