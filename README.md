@@ -19,33 +19,33 @@ cd ~/.node-red
 npm i node-red-contrib-physical-sandbox
 ```
 
-Restart Node-RED. The sidebar gets a tab 「PS」, and the palette gets a category "physical sandbox" with the
+Restart Node-RED. The sidebar gets a tab "PS", and the palette gets a category "physical sandbox" with the
 nodes `ps in` and `ps play`. The plugin never deploys flows and never does anything without a click.
 
 ## The pane
 
-Open the tab 「PS」 in the sidebar, or press 「Open in a window」 to put it on
+Open the tab "PS" in the sidebar, or press "Open in a window" to put it on
 another screen. Both show the same scene and the same stream, so you can use either, or both at once.
 
 The screens follow Node-RED's language setting (Japanese or English); messages to the agent stay in both languages.
+The labels below are the English ones (the Japanese ones are in [README.ja.md](README.ja.md)).
 
 - **Background.** Choose a photo or a video of the site. It stays in your browser and in
   `<userDir>/physical-sandbox/backgrounds/`; it is never sent to PS.com.
 - **Floor.** Click the four corners of a rectangle on the ground in the picture (1 to 4, going round), enter
-  the lengths of edges 1→2 and 2→3 in metres, and press 「決定」 (Decide). The robots are placed on this floor
+  the lengths of edges 1→2 and 2→3 in metres, and press "Decide". The robots are placed on this floor
   at real scale.
 - **Robots.** The list is made from three places: the PS.com catalog, the psbx cache
   (`~/.cache/physical-sandbox`) and local folders (below). Drag a robot onto the floor to place it. Without a
   connection to PS.com, only the robots on this computer are listed.
 - **Records.** Open one of your own records on PS.com (the list needs a sign-in), a record by `handle/name`, or
   a record file from this computer. Then play, stop or go back to the start (these play the open record
-  again; only opening reads it). The pane shows the site (「現地」) whose messages it takes: opening a record
-  takes the record's site, and 「現地をもとに戻す」 goes back to the plugin's.
+  again; only opening reads it). The pane shows the site ("Site") whose messages it takes: opening a record
+  takes the record's site, and "Back to the plugin's site" goes back to the plugin's.
 - **Recording the stream.** States that arrive through `ps in` are kept as a record in the pane, as they come.
-- **Saving.** 「上書き保存」 (Save) makes the next version of the record you opened. 「新しい記録として保存」
-  (Save as a new record) makes a new record under a name you give. Versions are never written over.
-  「エクスポート」 (Export) writes a record file to `<userDir>/physical-sandbox/exports/`.
-- **The agent switch.** 「エージェントに映像を渡す」 is off by default and off again after a restart. While it is on, an agent connected through `ps-nodered-mcp` can ask for the pane's pictures (see "Claude Desktop" below).
+- **Saving.** "Save" makes the next version of the record you opened. "Save as a new record" makes a new
+  record under a name you give. Versions are never written over. "Export" writes a record file to `<userDir>/physical-sandbox/exports/`.
+- **The agent switch.** "Share frames with the agent" is off by default and off again after a restart. While it is on, an agent connected through `ps-nodered-mcp` can ask for the pane's pictures (see "Claude Desktop" below).
 
 ## `ps in`: from MQTT into the pane
 
@@ -92,18 +92,17 @@ physicalSandbox: {
 ```
 
 Each robot goes in its own folder under the configured folder (`--out` is the folder `bundle.json` is written into). `~` is your home folder, and other relative paths are taken from the user directory. A record that uses such a
-robot cannot be saved to PS.com (PS.com does not have the robot); it stays on this computer as 「PS.com 未保存」.
+robot cannot be saved to PS.com (PS.com does not have the robot); it stays on this computer as "Not on PS.com".
 
 ## PS.com: sign-in and saving
 
-Press 「PS.com にログイン」 in the pane. It shows a 6-digit code and the address to open (`<catalogBase>/vr`, which is
+Press "Sign in to PS.com" in the pane. It shows a 6-digit code and the address to open (`<catalogBase>/vr`, which is
 `https://physicalsandbox.com/vr` by default); enter the code there and the pane is signed in. The token is kept in `<userDir>/physical-sandbox/ps-com-token.json`.
 
 If a save cannot reach PS.com (offline, signed out, PS.com failing), the record is kept in
-`<userDir>/physical-sandbox/unsent/` and the pane shows 「PS.com 未保存」 with a button 「再送信する」 (Send
-again). It survives a restart of Node-RED. If the record you saved over was changed elsewhere meanwhile, your
+`<userDir>/physical-sandbox/unsent/` and the pane shows "Not on PS.com" with a button "Send again". It survives a restart of Node-RED. If the record you saved over was changed elsewhere meanwhile, your
 copy is saved as a new record and the pane says so. A copy that can never go (it uses a robot only this
-computer has, or belongs to another account) can be taken away with 「取り除く」 on its line.
+computer has, or belongs to another account) can be taken away with "Remove" on its line.
 
 ## Claude Desktop
 
@@ -143,7 +142,7 @@ Limits of "this computer only":
 
 ### The pictures switch
 
-The pane's switch 「エージェントに映像を渡す」 (Share frames with the agent) is **off by default** and is not kept across restarts: after Node-RED restarts, it is off again. While it is **on**, the agent can ask for pictures of the pane (`ps_pane_frames`), and those pictures include the background photo or video. They go to the agent, and through it to the AI provider the agent runs on. This is the one place where pictures leave your machine. They are never sent to PS.com. With the switch off, nothing is sent and the tool is refused.
+The pane's switch "Share frames with the agent" is **off by default** and is not kept across restarts: after Node-RED restarts, it is off again. While it is **on**, the agent can ask for pictures of the pane (`ps_pane_frames`), and those pictures include the background photo or video. They go to the agent, and through it to the AI provider the agent runs on. This is the one place where pictures leave your machine. They are never sent to PS.com. With the switch off, nothing is sent and the tool is refused.
 
 ### No deploying
 
@@ -155,7 +154,7 @@ You ask Claude: 「OpenArm に盆踊りさせて」 (make OpenArm dance a bon od
 
 ## Privacy and limits
 
-- The background photo or video never leaves this computer, except while you turn on the pane's 「エージェントに映像を渡す」 switch: then the pictures go to the connected agent and its AI provider (never to PS.com). Only the record (states and the scene's devices)
+- The background photo or video never leaves this computer, except while you turn on the pane's "Share frames with the agent" switch: then the pictures go to the connected agent and its AI provider (never to PS.com). Only the record (states and the scene's devices)
   goes to PS.com, and only when you save.
 - When Node-RED's `adminAuth` is on, the textures of robots are not loaded (the shapes are).
 
