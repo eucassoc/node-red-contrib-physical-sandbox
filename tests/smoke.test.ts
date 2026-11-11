@@ -130,6 +130,35 @@ test('the editor gets the templates and help of both nodes', async () => {
   }
 });
 
+async function getLang(path: string, lang: string, accept = 'application/json'): Promise<string> {
+  const res = await fetch(base + path, { headers: { Accept: accept, 'Accept-Language': lang } });
+  assert.equal(res.status, 200, path);
+  return res.text();
+}
+
+test('each node\'s catalog and help come in Japanese and in English', async () => {
+  for (const name of ['ps-in', 'ps-play']) {
+    const catalogs: Record<string, any> = {};
+    for (const lang of ['ja', 'en-US']) {
+      catalogs[lang] = JSON.parse(await getLang(`/nodes/node-red-contrib-physical-sandbox/${name}/messages?lng=${lang}`, lang));
+      assert.ok(catalogs[lang][name], `${name} ${lang}: ${JSON.stringify(catalogs[lang])}`);
+    }
+    assert.match(catalogs.ja[name].label.name, /名前/);
+    assert.equal(catalogs['en-US'][name].label.name, 'Name');
+    assert.notEqual(catalogs.ja[name].status.notLoaded, catalogs['en-US'][name].status.notLoaded);
+  }
+  const ja = await getLang('/nodes', 'ja', 'text/html');
+  const en = await getLang('/nodes', 'en-US', 'text/html');
+  for (const type of ['ps in', 'ps play']) {
+    assert.match(ja, new RegExp(`data-help-name="${type}"`));
+    assert.match(en, new RegExp(`data-help-name="${type}"`));
+  }
+  assert.match(ja, /記録の動きを/);
+  assert.doesNotMatch(ja, /Plays a record's motion/);
+  assert.match(en, /Plays a record's motion/);
+  assert.doesNotMatch(en, /記録の動きを/);
+});
+
 /** Subscribe to `ps-pane/#` on Node-RED's comms socket as an editor does; the messages it is sent. */
 async function paneSocket(): Promise<{ received: { topic: string; data: any }[]; close: () => void }> {
   const ws = new WebSocket(base.replace(/^http/, 'ws') + '/comms');

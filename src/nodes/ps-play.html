@@ -29,8 +29,8 @@
       inputs: 1,
       outputs: 1,
       icon: 'font-awesome/fa-play',
-      paletteLabel: 'ps play',
-      label: function () { return this.name || (this.source === 'record' && this.ref ? this.ref : 'ps play'); },
+      paletteLabel: function () { return this._('ps-play.palette'); },
+      label: function () { return this.name || (this.source === 'record' && this.ref ? this.ref : this._('ps-play.palette')); },
       oneditprepare: function () {
         var record = this.record;
         if (record !== null && typeof record === 'object') $('#node-input-record').val(JSON.stringify(record, null, 1));
@@ -48,10 +48,10 @@
 
 <script type="text/html" data-template-name="ps play">
   <div class="form-row">
-    <label for="node-input-source"><i class="fa fa-film"></i> 記録 <small>(Record)</small></label>
+    <label for="node-input-source"><i class="fa fa-film"></i> <span data-i18n="ps-play.label.source"></span></label>
     <select id="node-input-source">
-      <option value="inline">このノードの記録 (in this node)</option>
-      <option value="record">PS.com の記録 (on PS.com)</option>
+      <option value="inline" data-i18n="ps-play.option.inline"></option>
+      <option value="record" data-i18n="ps-play.option.record"></option>
     </select>
   </div>
   <div class="form-row ps-play-inline">
@@ -59,74 +59,19 @@
     <textarea id="node-input-record" rows="8" style="width:70%;font-family:monospace;font-size:12px" placeholder="{ &quot;schemaVersion&quot;: 3, ... }"></textarea>
   </div>
   <div class="form-row ps-play-record">
-    <label for="node-input-ref"><i class="fa fa-cloud"></i> PS.com の記録 <small>(Ref)</small></label>
-    <input type="text" id="node-input-ref" placeholder="handle/name:バージョン (handle/name[:version])">
+    <label for="node-input-ref"><i class="fa fa-cloud"></i> <span data-i18n="ps-play.label.ref"></span></label>
+    <input type="text" id="node-input-ref" data-i18n="[placeholder]ps-play.placeholder.ref">
   </div>
   <div class="form-row">
-    <label for="node-input-speed"><i class="fa fa-tachometer"></i> 速さ <small>(Speed)</small></label>
+    <label for="node-input-speed"><i class="fa fa-tachometer"></i> <span data-i18n="ps-play.label.speed"></span></label>
     <input type="number" id="node-input-speed" min="0.1" max="10" step="0.1" style="width:80px">
   </div>
   <div class="form-row">
-    <label for="node-input-loop"><i class="fa fa-repeat"></i> 繰り返し <small>(Loop)</small></label>
+    <label for="node-input-loop"><i class="fa fa-repeat"></i> <span data-i18n="ps-play.label.loop"></span></label>
     <input type="checkbox" id="node-input-loop" style="width:auto;vertical-align:top">
   </div>
   <div class="form-row">
-    <label for="node-input-name"><i class="fa fa-tag"></i> 名前 <small>(Name)</small></label>
-    <input type="text" id="node-input-name" placeholder="Name">
+    <label for="node-input-name"><i class="fa fa-tag"></i> <span data-i18n="ps-play.label.name"></span></label>
+    <input type="text" id="node-input-name" data-i18n="[placeholder]ps-play.placeholder.name">
   </div>
-</script>
-
-<script type="text/html" data-help-name="ps play">
-  <p>記録の動きを <code>ps/&lt;site&gt;/&lt;id&gt;/state</code> のメッセージとして時間どおりに送ります。メッセージは出力に送り、Physical Sandbox の画面にも流します。</p>
-  <h3>入力</h3>
-  <dl class="message-properties">
-    <dt>payload <span class="property-type">string | object</span></dt>
-    <dd>
-      <ul>
-        <li><code>start</code>: 先頭から再生します。再生中に受け取ったときも、もう一度先頭から再生します。</li>
-        <li><code>stop</code>: その位置で止めます。次の <code>start</code> は先頭から再生します。</li>
-        <li><code>rewind</code>: 止めて先頭に戻します。メッセージは送りません。</li>
-        <li><code>{"command": "start", "speed": 2, "loop": true}</code>: 速さと繰り返しを、このノードの設定より優先して指定できます。</li>
-      </ul>
-    </dd>
-  </dl>
-  <h3>出力</h3>
-  <dl class="message-properties">
-    <dt>topic <span class="property-type">string</span></dt>
-    <dd><code>ps/&lt;site&gt;/&lt;id&gt;/state</code>。site は画面の現地です。</dd>
-    <dt>payload <span class="property-type">object</span></dt>
-    <dd>ロボットの <code>joints</code>・<code>position</code>・<code>yaw</code>、または物の <code>xyz</code>。<code>at</code> は再生した時刻（ミリ秒）です。</dd>
-  </dl>
-  <p><code>mqtt out</code> につなぐとブローカーに送れます。retain は <code>mqtt out</code> で設定してください。</p>
-  <h3>詳細</h3>
-  <p><b>記録</b>は、このノードに入れた記録の JSON か、PS.com の記録（<code>handle/name</code> または <code>handle/name:バージョン</code>）です。PS.com の記録は、デプロイ後の最初の <code>start</code> で取得し、次のデプロイまで使います。非公開の記録は、Physical Sandbox の画面で PS.com にログインしてから再生してください。</p>
-  <p>音楽や映像を合わせて再生するときは、音楽のノードにも同じ inject をつないでください。同じメッセージで同時に始まります。</p>
-  <p>このノードの再生は画面の再生とは別です。再生した動きは、画面の記録には残りません。<code>mqtt out</code> からブローカーを通って <code>ps in</code> に戻ってきたメッセージも、画面は動かしますが記録には残りません。状態には「再生中 n/m」と表示します。</p>
-
-  <hr>
-  <p>Plays a record's motion in time as <code>ps/&lt;site&gt;/&lt;id&gt;/state</code> messages, on its output and to the Physical Sandbox pane.</p>
-  <h3>Inputs</h3>
-  <dl class="message-properties">
-    <dt>payload <span class="property-type">string | object</span></dt>
-    <dd>
-      <ul>
-        <li><code>start</code>: plays from the beginning; while playing, starts again from the beginning.</li>
-        <li><code>stop</code>: stops where it is. The next <code>start</code> plays from the beginning.</li>
-        <li><code>rewind</code>: stops and goes back to the beginning, sending nothing.</li>
-        <li><code>{"command": "start", "speed": 2, "loop": true}</code>: speed and loop given here win over the node's settings.</li>
-      </ul>
-    </dd>
-  </dl>
-  <h3>Outputs</h3>
-  <dl class="message-properties">
-    <dt>topic <span class="property-type">string</span></dt>
-    <dd><code>ps/&lt;site&gt;/&lt;id&gt;/state</code>, with the pane's site.</dd>
-    <dt>payload <span class="property-type">object</span></dt>
-    <dd>A robot's <code>joints</code>, <code>position</code> and <code>yaw</code>, or an item's <code>xyz</code>; <code>at</code> is the time it was played (milliseconds).</dd>
-  </dl>
-  <p>Wire it to <code>mqtt out</code> to publish to a broker; retain is <code>mqtt out</code>'s setting.</p>
-  <h3>Details</h3>
-  <p>The <b>Record</b> is a record's JSON put in this node, or a PS.com record (<code>handle/name</code> or <code>handle/name:version</code>), read at the first <code>start</code> after a deploy and kept until the next deploy. For a private record, sign in to PS.com in the Physical Sandbox pane first.</p>
-  <p>To play music or a video with it, wire the same inject to the music node too: both start on the same message.</p>
-  <p>This playback is apart from the pane's own, and what it plays is not kept in the pane's record; nor are its messages when they come back through <code>mqtt out</code>, a broker and <code>ps in</code> (they still move the pane). The status shows 「再生中 n/m」 (playing n of m).</p>
 </script>

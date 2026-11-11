@@ -31,25 +31,6 @@ interface PsPlayDef extends NodeDef {
 
 type Command = { command: 'start' | 'stop' | 'rewind'; speed?: unknown; loop?: unknown };
 
-const WORDS = {
-  notLoaded: 'プラグインが読み込まれていません',
-  badCommand: 'msg.payload には start・stop・rewind のどれかを指定してください (send start, stop or rewind)',
-  noInline: '記録の JSON を入れてください',
-  badInline: '記録の JSON を読み込めませんでした',
-  noRef: '記録の名前（handle/name）を指定してください',
-  badRef: '記録の名前は handle/name か handle/name:バージョン で指定してください',
-  fetching: '記録を取得中',
-  offline: 'PS.com に接続できませんでした',
-  signIn: 'PS.com にログインしてください',
-  notFound: '記録が見つかりませんでした（{ref}）',
-  notFoundSignedOut: '記録が見つかりませんでした（{ref}）。非公開の記録は、Physical Sandbox の画面で PS.com にログインしてから再生してください',
-  empty: '記録に再生できる動きがありません',
-  playing: '再生中 {n}/{m}',
-  ended: '再生終了 {n}/{m}',
-  stopped: '停止 {n}/{m}',
-  rewound: '先頭 {n}/{m}',
-};
-
 /** The status shows the count at most this often while playing. */
 const STATUS_MS = 250;
 
@@ -69,6 +50,8 @@ class Shown extends Error {}
 
 export default function psPlayNode(RED: NodeAPI): void {
   const hubOf = (): Hub | undefined => (RED as any).plugins?.get?.('physical-sandbox')?.hub;
+  /** A status text from the node's message catalog, in the runtime's language. */
+  const T = (key: string, opts?: Record<string, unknown>): string => (RED as any)._(`ps-play.status.${key}`, opts);
 
   function PsPlay(this: Node, config: PsPlayDef): void {
     RED.nodes.createNode(this, config);
@@ -85,15 +68,15 @@ export default function psPlayNode(RED: NodeAPI): void {
     let lastShown = -Infinity;
 
     const show = (fill: 'green' | 'grey' | 'blue' | 'yellow' | 'red', shape: 'dot' | 'ring', text: string) => node.status({ fill, shape, text });
-    const count = (word: string, n: number) => word.replace('{n}', String(n)).replace('{m}', String(player?.count ?? 0));
+    const count = (key: string, n: number) => T(key, { n, m: player?.count ?? 0 });
 
     function inlineRecord(): Json {
       const raw = config.record;
       if (isObject(raw)) return raw;
-      if (typeof raw !== 'string' || raw.trim() === '') throw new Shown(WORDS.noInline);
+      if (typeof raw !== 'string' || raw.trim() === '') throw new Shown(T('noInline'));
       let parsed: unknown;
-      try { parsed = JSON.parse(raw); } catch { throw new Shown(WORDS.badInline); }
-      if (!isObject(parsed)) throw new Shown(WORDS.badInline);
+      try { parsed = JSON.parse(raw); } catch { throw new Shown(T('badInline')); }
+      if (!isObject(parsed)) throw new Shown(T('badInline'));
       return parsed;
     }
 
@@ -103,10 +86,10 @@ export default function psPlayNode(RED: NodeAPI): void {
         return got.record;
       } catch (e) {
         hub.refreshStatus?.(); // a token PS.com refused is forgotten
-        if (e instanceof Offline) throw new Shown(WORDS.offline);
-        if (e instanceof SignIn) throw new Shown(WORDS.signIn);
+        if (e instanceof Offline) throw new Shown(T('offline'));
+        if (e instanceof SignIn) throw new Shown(T('signIn'));
         if (e instanceof Refused && e.status === 404) {
-          throw new Shown((hub.client.status().signedIn ? WORDS.notFound : WORDS.notFoundSignedOut).replace('{ref}', ref));
+          throw new Shown(T(hub.client.status().signedIn ? 'notFound' : 'notFoundSignedOut', { ref }));
         }
         if (e instanceof Refused && e.message && e.message !== e.code) throw new Shown(e.message);
         throw e;
@@ -127,13 +110,13 @@ export default function psPlayNode(RED: NodeAPI): void {
           node.send({ topic, payload: structuredClone(payload) });
           if (sent < messages.length && clock.now() - lastShown >= STATUS_MS) {
             lastShown = clock.now();
-            show('green', 'dot', count(WORDS.playing, sent));
+            show('green', 'dot', count('playing', sent));
           }
         },
-        onEnd: () => show('green', 'ring', count(WORDS.ended, messages.length)),
+        onEnd: () => show('green', 'ring', count('ended', messages.length)),
       });
       if (!messages.length) {
-        show('yellow', 'ring', WORDS.empty);
+        show('yellow', 'ring', T('empty'));
         return;
       }
       lastShown = -Infinity;
@@ -143,25 +126,25 @@ export default function psPlayNode(RED: NodeAPI): void {
     node.on('input', (msg: any, _send: unknown, done: (err?: Error) => void) => {
       const hub = hubOf();
       if (!hub) {
-        show('red', 'ring', WORDS.notLoaded);
+        show('red', 'ring', T('notLoaded'));
         done();
         return;
       }
       const command = commandOf(msg.payload);
       if (!command) {
-        node.warn(WORDS.badCommand);
+        node.warn(T('badCommand'));
         done();
         return;
       }
       generation += 1;
       player?.stop();
       if (command.command === 'stop') {
-        if (player?.count) show('grey', 'ring', count(WORDS.stopped, player.sent()));
+        if (player?.count) show('grey', 'ring', count('stopped', player.sent()));
         done();
         return;
       }
       if (command.command === 'rewind') {
-        if (player?.count) show('grey', 'ring', count(WORDS.rewound, 0));
+        if (player?.count) show('grey', 'ring', count('rewound', 0));
         done();
         return;
       }
@@ -176,10 +159,10 @@ export default function psPlayNode(RED: NodeAPI): void {
         done();
         return;
       }
-      if (!ref) { failed(new Shown(WORDS.noRef)); return; }
-      if (!isRecordRef(ref)) { failed(new Shown(WORDS.badRef)); return; }
+      if (!ref) { failed(new Shown(T('noRef'))); return; }
+      if (!isRecordRef(ref)) { failed(new Shown(T('badRef'))); return; }
       const mine = generation;
-      show('blue', 'ring', WORDS.fetching);
+      show('blue', 'ring', T('fetching'));
       fetchRecord(hub)
         .then((record) => {
           fetched = record;

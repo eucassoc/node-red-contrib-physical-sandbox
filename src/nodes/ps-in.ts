@@ -14,12 +14,6 @@ import { isTopicName, parseTopic } from '../pscom/state.js';
 
 interface PsInDef extends NodeDef { site?: string }
 
-const WORDS = {
-  notLoaded: 'プラグインが読み込まれていません',
-  unreadable: '読み込めないメッセージ',
-  badSite: '現地の名前が正しくありません (bad site name)',
-};
-
 export default function psInNode(RED: NodeAPI): void {
   const hubOf = (): Hub | undefined => (RED as any).plugins?.get?.('physical-sandbox')?.hub;
 
@@ -29,11 +23,11 @@ export default function psInNode(RED: NodeAPI): void {
     const site = typeof config.site === 'string' ? config.site.trim() : '';
     const badSite = site !== '' && !isTopicName(site);
     let saidUnreadable = false;
-    if (badSite) node.status({ fill: 'red', shape: 'ring', text: WORDS.badSite });
+    if (badSite) node.status({ fill: 'red', shape: 'ring', text: RED._('ps-in.status.badSite') });
 
     node.on('input', (msg: any, send: (m: any) => void, done: (err?: Error) => void) => {
       if (badSite) {
-        node.status({ fill: 'red', shape: 'ring', text: WORDS.badSite });
+        node.status({ fill: 'red', shape: 'ring', text: RED._('ps-in.status.badSite') });
         done();
         return;
       }
@@ -41,7 +35,7 @@ export default function psInNode(RED: NodeAPI): void {
       if (!message) {
         if (!saidUnreadable) {
           saidUnreadable = true;
-          node.status({ fill: 'yellow', shape: 'ring', text: WORDS.unreadable });
+          node.status({ fill: 'yellow', shape: 'ring', text: RED._('ps-in.status.unreadable') });
         }
         done();
         return;
@@ -52,7 +46,7 @@ export default function psInNode(RED: NodeAPI): void {
       }
       const hub = hubOf();
       if (hub) hub.push({ topic: msg.topic, payload: msg.payload }, 'mqtt', { retained: msg.retain === true });
-      else node.status({ fill: 'red', shape: 'ring', text: WORDS.notLoaded });
+      else node.status({ fill: 'red', shape: 'ring', text: RED._('ps-in.status.notLoaded') });
       send(msg);
       done();
     });

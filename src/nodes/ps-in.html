@@ -18,52 +18,19 @@
       inputs: 1,
       outputs: 1,
       icon: 'font-awesome/fa-cube',
-      paletteLabel: 'ps in',
-      label: function () { return this.name || (this.site ? 'ps in ' + this.site : 'ps in'); },
+      paletteLabel: function () { return this._('ps-in.palette'); },
+      label: function () { return this.name || (this.site ? this._('ps-in.palette') + ' ' + this.site : this._('ps-in.palette')); },
     });
   })();
 </script>
 
 <script type="text/html" data-template-name="ps in">
   <div class="form-row">
-    <label for="node-input-site"><i class="fa fa-map-marker"></i> 現地 <small>(Site)</small></label>
-    <input type="text" id="node-input-site" placeholder="すべて (every site)">
+    <label for="node-input-site"><i class="fa fa-map-marker"></i> <span data-i18n="ps-in.label.site"></span></label>
+    <input type="text" id="node-input-site" data-i18n="[placeholder]ps-in.placeholder.site">
   </div>
   <div class="form-row">
-    <label for="node-input-name"><i class="fa fa-tag"></i> 名前 <small>(Name)</small></label>
-    <input type="text" id="node-input-name" placeholder="Name">
+    <label for="node-input-name"><i class="fa fa-tag"></i> <span data-i18n="ps-in.label.name"></span></label>
+    <input type="text" id="node-input-name" data-i18n="[placeholder]ps-in.placeholder.name">
   </div>
-</script>
-
-<script type="text/html" data-help-name="ps in">
-  <p><code>mqtt in</code> などから受け取った <code>ps/&lt;site&gt;/&lt;id&gt;/&lt;kind&gt;</code> のメッセージを、Physical Sandbox の画面に流します。</p>
-  <h3>入力</h3>
-  <dl class="message-properties">
-    <dt>topic <span class="property-type">string</span></dt>
-    <dd><code>ps/&lt;site&gt;/&lt;id&gt;/state</code>・<code>command</code>・<code>event</code></dd>
-    <dt>payload <span class="property-type">object | string | buffer</span></dt>
-    <dd>JSON のオブジェクト。<code>at</code>（ミリ秒）が必要です。<code>mqtt in</code> の出力の設定が「自動判定」「文字列」「バイナリバッファ」のどれでも受け取れます。</dd>
-    <dt class="optional">retain <span class="property-type">boolean</span></dt>
-    <dd>ブローカーが保持していたメッセージは画面のロボットを動かしますが、開いている記録の動きとしては残しません。</dd>
-  </dl>
-  <h3>出力</h3>
-  <p>受け取ったメッセージをそのまま送ります。</p>
-  <h3>詳細</h3>
-  <p>読み込めないメッセージは捨て、最初の 1 回だけ状態を黄色で表示します。<b>現地</b>を指定すると、その現地のメッセージだけを受け取ります。現地の名前が正しくないときは何も受け取らず、状態を赤で表示します。プラグインが読み込まれていないときも、メッセージは出力に送ります。</p>
-
-  <hr>
-  <p>Takes <code>ps/&lt;site&gt;/&lt;id&gt;/&lt;kind&gt;</code> messages, for example from <code>mqtt in</code>, into the Physical Sandbox pane.</p>
-  <h3>Inputs</h3>
-  <dl class="message-properties">
-    <dt>topic <span class="property-type">string</span></dt>
-    <dd><code>ps/&lt;site&gt;/&lt;id&gt;/state</code>, <code>command</code> or <code>event</code></dd>
-    <dt>payload <span class="property-type">object | string | buffer</span></dt>
-    <dd>A JSON object with <code>at</code> (milliseconds). Any Output setting of <code>mqtt in</code> works: a parsed object, a string or a Buffer.</dd>
-    <dt class="optional">retain <span class="property-type">boolean</span></dt>
-    <dd>A message the broker kept moves the robots in the pane but is not kept as part of the opened record.</dd>
-  </dl>
-  <h3>Outputs</h3>
-  <p>The message as it came.</p>
-  <h3>Details</h3>
-  <p>A message that cannot be read is dropped; the first one turns the status yellow. With a <b>Site</b>, only that site's messages are taken; a site that is not a site name takes nothing and turns the status red. Without the plugin, messages still go on to the output.</p>
 </script>

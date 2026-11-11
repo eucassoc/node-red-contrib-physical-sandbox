@@ -1,0 +1,27 @@
+<script type="text/html" data-help-name="ps play">
+  <p>Plays a record's motion in time as <code>ps/&lt;site&gt;/&lt;id&gt;/state</code> messages, on its output and to the Physical Sandbox pane.</p>
+  <h3>Inputs</h3>
+  <dl class="message-properties">
+    <dt>payload <span class="property-type">string | object</span></dt>
+    <dd>
+      <ul>
+        <li><code>start</code>: plays from the beginning; while playing, starts again from the beginning.</li>
+        <li><code>stop</code>: stops where it is. The next <code>start</code> plays from the beginning.</li>
+        <li><code>rewind</code>: stops and goes back to the beginning, sending nothing.</li>
+        <li><code>{"command": "start", "speed": 2, "loop": true}</code>: speed and loop given here win over the node's settings.</li>
+      </ul>
+    </dd>
+  </dl>
+  <h3>Outputs</h3>
+  <dl class="message-properties">
+    <dt>topic <span class="property-type">string</span></dt>
+    <dd><code>ps/&lt;site&gt;/&lt;id&gt;/state</code>, with the pane's site.</dd>
+    <dt>payload <span class="property-type">object</span></dt>
+    <dd>A robot's <code>joints</code>, <code>position</code> and <code>yaw</code>, or an item's <code>xyz</code>; <code>at</code> is the time it was played (milliseconds).</dd>
+  </dl>
+  <p>Wire it to <code>mqtt out</code> to publish to a broker; retain is <code>mqtt out</code>'s setting.</p>
+  <h3>Details</h3>
+  <p>The <b>Record</b> is a record's JSON put in this node, or a PS.com record (<code>handle/name</code> or <code>handle/name:version</code>), read at the first <code>start</code> after a deploy and kept until the next deploy. For a private record, sign in to PS.com in the Physical Sandbox pane first.</p>
+  <p>To play music or a video with it, wire the same inject to the music node too: both start on the same message.</p>
+  <p>This playback is apart from the pane's own, and what it plays is not kept in the pane's record; nor are its messages when they come back through <code>mqtt out</code>, a broker and <code>ps in</code> (they still move the pane). The status shows "Playing n/m" (n of m messages sent).</p>
+</script>

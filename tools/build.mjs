@@ -40,6 +40,8 @@ await cp(join(src, 'plugin', 'editor.html'), join(dist, 'plugin', 'index.html'))
 for (const name of await readdir(join(src, 'nodes'))) {
   if (name.endsWith('.html')) await cp(join(src, 'nodes', name), join(dist, 'nodes', name));
 }
+// Node-RED reads each node's message catalog and help from locales/<lang>/ beside its .js file.
+await cp(join(src, 'nodes', 'locales'), join(dist, 'nodes', 'locales'), { recursive: true });
 
 // The pane page, served by the plugin: index.html plus one bundled module.
 if (existsSync(join(src, 'pane', 'main.ts'))) {

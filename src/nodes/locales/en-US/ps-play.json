@@ -1,0 +1,38 @@
+{
+  "ps-play": {
+    "palette": "ps play",
+    "label": {
+      "source": "Record",
+      "ref": "PS.com record",
+      "speed": "Speed",
+      "loop": "Loop",
+      "name": "Name"
+    },
+    "option": {
+      "inline": "In this node",
+      "record": "On PS.com"
+    },
+    "placeholder": {
+      "ref": "handle/name[:version]",
+      "name": "Name"
+    },
+    "status": {
+      "notLoaded": "The plugin is not loaded",
+      "badCommand": "Send start, stop or rewind in msg.payload",
+      "noInline": "Put the record's JSON in the node",
+      "badInline": "The record's JSON could not be read",
+      "noRef": "Give the record's name (handle/name)",
+      "badRef": "Give the record as handle/name or handle/name:version",
+      "fetching": "Reading the record",
+      "offline": "Could not reach PS.com",
+      "signIn": "Sign in to PS.com",
+      "notFound": "Record not found (__ref__)",
+      "notFoundSignedOut": "Record not found (__ref__). For a private record, sign in to PS.com in the Physical Sandbox pane first, then play it",
+      "empty": "The record has no motion to play",
+      "playing": "Playing __n__/__m__",
+      "ended": "Finished __n__/__m__",
+      "stopped": "Stopped __n__/__m__",
+      "rewound": "At the start __n__/__m__"
+    }
+  }
+}

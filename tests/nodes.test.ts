@@ -12,6 +12,7 @@ import psPlayNode from '../src/nodes/ps-play.js';
 import { PsComClient } from '../src/core/pscom-client.js';
 import { fakeClock } from './helpers/fake-red.js';
 import { FakePsCom } from './helpers/fake-pscom.js';
+import { catalogUnderscore } from './helpers/node-catalog.js';
 
 const require = createRequire(import.meta.url);
 const helper = require('node-red-node-test-helper');
@@ -37,8 +38,9 @@ function stubHub(opts: { clock?: ReturnType<typeof fakeClock>; client?: unknown;
 }
 
 /** The node modules, given a RED whose plugins answer with `hub` (or with nothing). */
-function withHub(hub: unknown) {
+function withHub(hub: unknown, lang: 'en-US' | 'ja' = 'ja') {
   return [psInNode, psPlayNode].map((fn) => (red: any) => {
+    red._ = catalogUnderscore(lang);
     red.plugins.get = (id: string) => (id === 'physical-sandbox' && hub ? { type: 'physical-sandbox', hub } : undefined);
     return fn(red);
   });
@@ -162,7 +164,7 @@ test('ps in with a site that is not a site name says so in red and takes nothing
   await settle();
   assert.deepEqual(hub.pushed, []);
   assert.deepEqual(out, []);
-  assert.deepEqual(seen.at(-1), { fill: 'red', shape: 'ring', text: '現地の名前が正しくありません (bad site name)' });
+  assert.deepEqual(seen.at(-1), { fill: 'red', shape: 'ring', text: '現地の名前が正しくありません' });
 });
 
 // ---- ps play ----

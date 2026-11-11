@@ -1,0 +1,18 @@
+{
+  "ps-in": {
+    "palette": "ps in",
+    "label": {
+      "site": "現地",
+      "name": "名前"
+    },
+    "placeholder": {
+      "site": "すべて",
+      "name": "名前"
+    },
+    "status": {
+      "notLoaded": "プラグインが読み込まれていません",
+      "unreadable": "読み込めないメッセージ",
+      "badSite": "現地の名前が正しくありません"
+    }
+  }
+}

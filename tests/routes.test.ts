@@ -794,6 +794,10 @@ test('every sentence shown to people keeps the package\'s wording (no 直す・�
   for (const file of readdirSync(nodesDir).filter((f) => f.endsWith('.html'))) {
     for (const line of readFileSync(join(nodesDir, file), 'utf8').split('\n')) if (japanese.test(line)) sentences.push([`src/nodes/${file}`, line.trim()]);
   }
+  // and the nodes' Japanese catalogs and help
+  for (const file of readdirSync(join(nodesDir, 'locales', 'ja'))) {
+    for (const line of readFileSync(join(nodesDir, 'locales', 'ja', file), 'utf8').split('\n')) if (japanese.test(line)) sentences.push([`src/nodes/locales/ja/${file}`, line.trim()]);
+  }
   // and every Japanese line of the plugin's editor side
   const pluginDir = join(import.meta.dirname, '..', 'src/plugin');
   for (const file of readdirSync(pluginDir).filter((f) => f.endsWith('.html'))) {

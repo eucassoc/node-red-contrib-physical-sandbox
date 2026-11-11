@@ -1,0 +1,18 @@
+{
+  "ps-in": {
+    "palette": "ps in",
+    "label": {
+      "site": "Site",
+      "name": "Name"
+    },
+    "placeholder": {
+      "site": "Every site",
+      "name": "Name"
+    },
+    "status": {
+      "notLoaded": "The plugin is not loaded",
+      "unreadable": "Message that cannot be read",
+      "badSite": "Not a valid site name"
+    }
+  }
+}

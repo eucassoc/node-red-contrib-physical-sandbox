@@ -1,0 +1,38 @@
+{
+  "ps-play": {
+    "palette": "ps play",
+    "label": {
+      "source": "記録",
+      "ref": "PS.com の記録",
+      "speed": "速さ",
+      "loop": "繰り返し",
+      "name": "名前"
+    },
+    "option": {
+      "inline": "このノードの記録",
+      "record": "PS.com の記録"
+    },
+    "placeholder": {
+      "ref": "handle/name:バージョン",
+      "name": "名前"
+    },
+    "status": {
+      "notLoaded": "プラグインが読み込まれていません",
+      "badCommand": "msg.payload には start・stop・rewind のどれかを指定してください",
+      "noInline": "記録の JSON を入れてください",
+      "badInline": "記録の JSON を読み込めませんでした",
+      "noRef": "記録の名前（handle/name）を指定してください",
+      "badRef": "記録の名前は handle/name か handle/name:バージョン で指定してください",
+      "fetching": "記録を取得中",
+      "offline": "PS.com に接続できませんでした",
+      "signIn": "PS.com にログインしてください",
+      "notFound": "記録が見つかりませんでした（__ref__）",
+      "notFoundSignedOut": "記録が見つかりませんでした（__ref__）。非公開の記録は、Physical Sandbox の画面で PS.com にログインしてから再生してください",
+      "empty": "記録に再生できる動きがありません",
+      "playing": "再生中 __n__/__m__",
+      "ended": "再生終了 __n__/__m__",
+      "stopped": "停止 __n__/__m__",
+      "rewound": "先頭 __n__/__m__"
+    }
+  }
+}
