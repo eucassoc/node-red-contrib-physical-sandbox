@@ -11,7 +11,10 @@
  * A save over a record that was saved over elsewhere meanwhile is neither lost nor written over: it
  * goes as a new record under the first free `<name>-2`, `<name>-3`… and the note says so. A kept new
  * record whose name was taken meanwhile goes the same way. Saving over the same record again while a
- * copy of it waits replaces that copy (its `base` stays): one save over makes one version.
+ * copy of it waits replaces that copy (its `base` stays): one save over makes one version. Saving
+ * the same content as new under the same name while it waits is that copy again, not one more (a
+ * record naming a local robot is kept on every save). A copy that will never go (another account's,
+ * a local robot's) can be taken away with `removeCopy`.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -82,7 +85,8 @@ function writeAtomic(file: string, text: string): void {
 /**
  * Keep `record` for `ref` in `dir`; the name it is kept under (the ref's name, or the first free
  * `<name>-2`, `<name>-3`… beside an earlier copy). A save over `ref` while a save over it waits
- * replaces that copy's record and keeps its `base`.
+ * replaces that copy's record and keeps its `base`; a new record under `ref` with exactly the
+ * content of a waiting one is that one.
  */
 export function keep(dir: string, record: object, target: Target): string {
   const { ref, mode, base } = target;
@@ -95,6 +99,10 @@ export function keep(dir: string, record: object, target: Target): string {
       writeAtomic(join(dir, `${waiting.name}.record.json`), text);
       return waiting.name;
     }
+  }
+  if (mode === 'new') { // the same content saved as new again: the copy that waits already
+    const same = pending(dir).find((p) => p.ref === ref && p.mode === 'new' && readText(join(dir, `${p.name}.record.json`)) === text);
+    if (same) return same.name;
   }
   const stem = nameOf(ref);
   let name = stem;
@@ -122,10 +130,25 @@ export function pending(dir: string): Pending[] {
   return out;
 }
 
+const readText = (file: string): string | null => {
+  try { return readFileSync(file, 'utf8'); } catch { return null; }
+};
+
 const remove = (dir: string, name: string): void => {
   rmSync(join(dir, `${name}.send.json`), { force: true }); // first: a copy without it is never sent again
   rmSync(join(dir, `${name}.record.json`), { force: true });
 };
+
+/**
+ * Take away the kept copy `name` (the person's 「取り除く」): its two files, nothing else. False when
+ * no copy has that name (the name is matched against the copies, never used as a path on its own).
+ */
+export function removeCopy(dir: string, name: string): boolean {
+  const copy = pending(dir).find((p) => p.name === name);
+  if (!copy) return false;
+  remove(dir, copy.name);
+  return true;
+}
 
 /** Forget the kept saves over `ref`: a newer save over it reached PS.com. */
 export function dropOver(dir: string, ref: string): void {

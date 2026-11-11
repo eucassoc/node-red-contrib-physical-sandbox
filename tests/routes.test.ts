@@ -96,6 +96,7 @@ test('reads ask for flows.read and everything that changes something for flows.w
       ['POST', '/physical-sandbox/record/save', 'flows.write'],
       ['POST', '/physical-sandbox/record/export', 'flows.write'],
       ['POST', '/physical-sandbox/unsent/send', 'flows.write'],
+      ['POST', '/physical-sandbox/unsent/remove', 'flows.write'],
       ['POST', '/physical-sandbox/login/start', 'flows.write'],
       ['GET', '/physical-sandbox/login/poll', 'flows.write'],
       ['POST', '/physical-sandbox/pane/agent-frames', 'flows.write'],
@@ -1097,5 +1098,24 @@ test('the pane page and its files may be framed by the editor only', async () =>
       await res.text();
       assert.equal(res.headers.get('content-security-policy'), "frame-ancestors 'self'", path);
     }
+  } finally { await s.close(); }
+});
+
+test('unsent/remove takes away one kept copy; one that is not there is 404; the pane line has 「取り除く」', async () => {
+  const s = await setup();
+  try {
+    await s.call('POST', '/physical-sandbox/stream/play', { record: walkRecord });
+    await s.call('POST', '/physical-sandbox/record/save', { mode: 'new', name: 'kept' });
+    await s.call('POST', '/physical-sandbox/record/save', { mode: 'new', name: 'other' });
+    assert.deepEqual(s.red.retained('ps-pane/status').unsent.map((u: any) => u.name), ['kept', 'other']);
+    let r = await s.call('POST', '/physical-sandbox/unsent/remove', { name: 'kept' });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(s.red.retained('ps-pane/status').unsent.map((u: any) => u.name), ['other']);
+    assert.deepEqual(readdirSync(s.hub.dirs.unsent).sort(), ['other.record.json', 'other.send.json']);
+    r = await s.call('POST', '/physical-sandbox/unsent/remove', { name: 'kept' });
+    assert.equal(r.status, 404);
+    assert.equal(r.json.error, WORDS.noUnsent);
+    assert.equal((await s.call('POST', '/physical-sandbox/unsent/remove', { name: '../scene' })).status, 404);
+    assert.equal(PANE_WORDS.remove.ja, '取り除く');
   } finally { await s.close(); }
 });

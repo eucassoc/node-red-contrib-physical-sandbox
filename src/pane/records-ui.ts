@@ -3,7 +3,7 @@
  * `handle/name` or from a file), playing the opened one again from the hub's copy (再生, and 頭へ,
  * which goes back to its start), stopping it; what the stream holds
  * (「流れている動きを記録中（n 件）」, 「記録を空にする」); the two saves, the export, the copies kept
- * while PS.com could not be reached (red, with 「再送信する」); signing in with a 6-digit code; and
+ * while PS.com could not be reached (red, with 「再送信する」, and 「取り除く」 on each); signing in with a 6-digit code; and
  * the switch that lets the agent have the stage's frames.
  *
  * Everything the pane shows here comes from the hub's retained status, so every pane shows the same.
@@ -397,7 +397,18 @@ export function mountRecordsUi(opts: {
     for (const line of unsent) {
       const item = el('li', 'ps-error');
       item.dataset.unsent = line.name;
-      item.textContent = line.text;
+      // A copy that will never go (another account's, a local robot's) can be taken away
+      const removeButton = buttonOf('remove', 'ps-button ps-small');
+      removeButton.addEventListener('click', async () => {
+        if (!window.confirm(ja('removeUnsentAsk', { name: line.name }))) return;
+        try {
+          await api.post('unsent/remove', { name: line.name });
+          say(ja('removedUnsent', { name: line.name }), en('removedUnsent', { name: line.name }));
+        } catch (e) {
+          fail(e);
+        }
+      });
+      item.append(line.text, ' ', removeButton);
       unsentList.append(item);
     }
     resendButton.hidden = unsent.length === 0;

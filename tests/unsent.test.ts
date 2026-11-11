@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Moved, Offline, PsComClient, Refused, SignIn, Taken, tokenFileIn } from '../src/core/pscom-client.js';
-import { keep, MOVED, OFFLINE, pending, refusalWords, save, sendAll, SERVER_DOWN, SIGN_IN, unsentDirIn, type Sender } from '../src/core/unsent.js';
+import { keep, MOVED, OFFLINE, pending, refusalWords, removeCopy, save, sendAll, SERVER_DOWN, SIGN_IN, unsentDirIn, type Sender } from '../src/core/unsent.js';
 import { FakePsCom } from './helpers/fake-pscom.js';
 
 const tmp = (): string => mkdtempSync(join(tmpdir(), 'ps-unsent-'));
@@ -320,4 +320,38 @@ test('a save that reaches PS.com drops the waiting saves over the same record an
 
 test('Moved carries the latest version', () => {
   assert.equal(new Moved('4').latest, '4');
+});
+
+test('removeCopy takes away that copy\'s two files only; a name that is not a copy is not touched', () => {
+  const dir = join(tmp(), 'unsent');
+  keep(dir, record('a'), { ref: 'walk', mode: 'new', base: null });
+  keep(dir, record('b'), { ref: 'walk', mode: 'new', base: null });
+  writeFileSync(join(dir, 'walk.notes.txt'), 'mine');
+  assert.equal(removeCopy(dir, 'walk'), true);
+  assert.deepEqual(readdirSync(dir).sort(), ['walk-2.record.json', 'walk-2.send.json', 'walk.notes.txt']);
+  for (const name of ['walk', '../unsent/walk-2', 'walk-2.record.json', '', 'nothing']) assert.equal(removeCopy(dir, name), false, name);
+  assert.deepEqual(pending(dir).map((p) => p.name), ['walk-2']);
+  assert.equal(removeCopy(join(tmp(), 'none'), 'walk'), false);
+});
+
+test('saving the same content as new again does not stack copies; other content still gets -2', () => {
+  const dir = join(tmp(), 'unsent');
+  assert.equal(keep(dir, record('a'), { ref: 'walk', mode: 'new', base: null }), 'walk');
+  assert.equal(keep(dir, record('a'), { ref: 'walk', mode: 'new', base: null }), 'walk');
+  assert.equal(keep(dir, record('b'), { ref: 'walk', mode: 'new', base: null }), 'walk-2');
+  assert.equal(keep(dir, record('b'), { ref: 'walk', mode: 'new', base: null }), 'walk-2');
+  assert.deepEqual(pending(dir).map((p) => p.name), ['walk', 'walk-2']);
+});
+
+test('a record naming a robot only this machine has, saved again and again, stays one copy', async () => {
+  const userDir = tmp();
+  const { fake, client } = await signedIn(userDir, (name) => name === 'myarm');
+  try {
+    const dir = unsentDirIn(userDir);
+    for (let i = 0; i < 3; i += 1) {
+      const out = await save(dir, client.saveRecord.bind(client), record('r', 'myarm'), { ref: 'walk', mode: 'new', base: null });
+      assert.deepEqual([out.saved, (out as any).unsent], [false, 'walk']);
+    }
+    assert.deepEqual(pending(dir).map((p) => p.name), ['walk']);
+  } finally { await fake.stop(); }
 });

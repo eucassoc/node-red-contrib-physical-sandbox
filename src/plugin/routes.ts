@@ -25,7 +25,7 @@ import {
   type MachineRow, type Resolved,
 } from '../core/machines.js';
 import { Offline, Refused, SignIn, Taken } from '../core/pscom-client.js';
-import { save } from '../core/unsent.js';
+import { removeCopy, save } from '../core/unsent.js';
 import { Busy, type Hub, type Opened } from './hub.js';
 
 type Json = Record<string, any>;
@@ -65,6 +65,7 @@ export const WORDS = {
   noPane: '画面はまだ用意されていません',
   notPane: 'Physical Sandbox の画面から操作してください',
   busy: '保存中です。終わるまでお待ちください',
+  noUnsent: 'その名前の PS.com 未保存の記録はありません',
   badSite: '現地の名前が正しくありません（英数字など 1〜80 文字で、/ + # は使えません）',
 };
 
@@ -619,6 +620,21 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
   }));
 
   app.post(`${P}/unsent/send`, write, handle(async (req, res) => { res.json(await hub.sendUnsent()); }));
+
+  // 「取り除く」 on a red line: that kept copy's two files, not while a save or a send is under way
+  app.post(`${P}/unsent/remove`, write, jsonBody, handle(async (req, res) => {
+    const { name } = req.body;
+    let removed: boolean;
+    try {
+      removed = await hub.exclusiveSave(async () => typeof name === 'string' && removeCopy(hub.dirs.unsent, name));
+    } catch (e) {
+      if (e instanceof Busy) throw new Answer(409, WORDS.busy, 'busy');
+      throw e;
+    }
+    hub.refreshStatus();
+    if (!removed) throw new Answer(404, WORDS.noUnsent, 'no-unsent');
+    res.json({ removed: name, status: hub.status() });
+  }));
 
   // ---- signing in ----
 
