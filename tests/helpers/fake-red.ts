@@ -2,7 +2,8 @@
  * A small Node-RED for the hub and its routes:
  *
  * - `httpAdmin` is a real express app (the one Node-RED uses), with no body parser in front, so
- *   the routes read their own bodies; `listen()` serves it on a free port.
+ *   the routes read their own bodies (`adminJsonParser` puts Node-RED's 5 MB JSON parser in front);
+ *   `listen()` serves it on a free port.
  * - `comms.publish` keeps the retained messages per topic and sends every message to every pane,
  *   as Node-RED's runtime comms does (each message goes out as JSON); `pane()` subscribes a new one,
  *   which is sent the retained messages at once.
@@ -20,12 +21,15 @@ const express = require('express');
 
 export interface Pane { received: { topic: string; data: any }[]; latest(topic: string): any }
 
-export function fakeRed(opts: { userDir: string; settings?: Record<string, unknown> }) {
+export function fakeRed(opts: { userDir: string; settings?: Record<string, unknown>; adminJsonParser?: boolean }) {
   const retained = new Map<string, string>();
   const panes: Pane[] = [];
   const published: { topic: string; data: any; retain: boolean }[] = [];
   const permissions = new Map<string, string>();
   const app = express();
+  // Node-RED's own JSON parser in front of every admin route (editor-api: apiMaxLength, 5 MB by default)
+  // ('test' keeps express from printing the 413 it answers)
+  if (opts.adminJsonParser) { app.set('env', 'test'); app.use(express.json({ limit: '5mb' })); }
 
   const newPane = (): Pane => {
     const pane: Pane = {

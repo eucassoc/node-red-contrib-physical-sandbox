@@ -232,3 +232,20 @@ test('a write is taken as JSON (read by Node-RED) or with the pane\'s header, an
   assert.equal(r.status, 200);
   assert.equal((await r.json()).device.id, 'myarm-1');
 });
+
+test('an MCP client on this machine, with the key the plugin made in the userDir, lists ps_status through this Node-RED (its JSON parser in front)', async () => {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+  const key = (await readFile(join(userDir, 'physical-sandbox', 'mcp-key'), 'utf8')).trim();
+  assert.match(key, /^[0-9a-f]{64}$/);
+  const url = new URL(`${base}/physical-sandbox/mcp`);
+  const client = new Client({ name: 'smoke', version: '0.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${key}` } } }));
+  try {
+    assert.deepEqual((await client.listTools()).tools.map((t) => t.name), ['ps_status']);
+    const answer: any = await client.callTool({ name: 'ps_status', arguments: {} });
+    assert.equal(JSON.parse(answer.content[0].text).scene.site, 'smoke');
+  } finally { await client.close(); }
+  const noKey = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }, body: '{}' });
+  assert.equal(noKey.status, 401);
+});

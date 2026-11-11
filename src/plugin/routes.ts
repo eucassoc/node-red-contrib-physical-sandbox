@@ -88,7 +88,7 @@ class Answer extends Error {
  * The whole body, or null as soon as it is longer than `limit` (or says so in Content-Length):
  * reading stops there, and the caller answers with `refuseTooLarge`, which closes the connection.
  */
-function readBody(req: any, limit: number): Promise<Buffer | null> {
+export function readBody(req: any, limit: number): Promise<Buffer | null> {
   return new Promise((resolve, reject) => {
     if (Number(req.headers?.['content-length']) > limit) { resolve(null); return; }
     const chunks: Buffer[] = [];
@@ -120,8 +120,9 @@ export const REFUSED_GRACE_MS = 1000;
  * waits in the network buffers, then the sender is held back), and the connection is cut after
  * REFUSED_GRACE_MS. Cutting it at once would throw the 413 away on the sender's side with the
  * unread bytes (a reset), so the person would see a broken connection instead of the reason.
+ * `body` is the answer (the MCP route answers in JSON-RPC).
  */
-function refuseTooLarge(req: any, res: any, error: string): void {
+export function refuseTooLarge(req: any, res: any, error: string, body: Json = { error, reason: 'too-large' }): void {
   req.pause();
   const socket = req.socket;
   res.on('finish', () => {
@@ -129,7 +130,7 @@ function refuseTooLarge(req: any, res: any, error: string): void {
     const cut = setTimeout(() => req.destroy(), REFUSED_GRACE_MS);
     cut.unref?.(); // never keeps Node-RED from stopping
   });
-  res.status(413).json({ error, reason: 'too-large' });
+  res.status(413).json(body);
 }
 
 /** Only the pane writes: a JSON body, or the pane's own header (see the top of this file). */

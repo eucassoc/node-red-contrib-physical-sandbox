@@ -7,4 +7,10 @@ This product bundles third-party code in the files it builds into dist/, for the
 
 - three.js r180 (MIT License, Copyright 2010-2025 three.js authors), to draw the robots and the site.
 
+and, for the MCP server in the plugin (dist/plugin/index.js):
+
+- MCP TypeScript SDK (@modelcontextprotocol/sdk 1.32, MIT License, Copyright Anthropic, PBC), with what it uses:
+  zod (MIT), ajv and ajv-formats (MIT), fast-uri (BSD-3-Clause), hono and @hono/node-server (MIT),
+  zod-to-json-schema (ISC), content-type (MIT), json-schema-traverse (MIT), fast-deep-equal (MIT).
+
 The files in src/pscom/ are copied from PS.com (physicalsandbox.com), by permission of its owner (2026-11-11), and are licensed here under the Apache License, Version 2.0. See src/pscom/PROVENANCE.md.
