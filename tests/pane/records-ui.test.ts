@@ -1,7 +1,7 @@
 // What the records part of the pane shows (src/pane/records-ui.ts) and the robots lists (src/pane/place-ui.ts).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { NAME, openedLine, playAgainBody, playingLine, recordingLine, saveButtons, unsentLines } from '../../src/pane/records-ui.js';
+import { myRecordRows, NAME, openedLine, playAgainBody, playingLine, recordingLine, saveButtons, unsentLines } from '../../src/pane/records-ui.js';
 import { machineRows, placedRows, placeRequest } from '../../src/pane/place-ui.js';
 import { ja } from '../../src/pane/words.js';
 
@@ -57,4 +57,18 @@ test('the robots list takes the rows of GET machines; the placed list says which
     { id: 'ghost-1', product: 'gone/ghost:1', note: 'gone/ghost:1 を読み込めませんでした' },
   ]);
   assert.deepEqual(placeRequest('physical-sandbox/openarm', [1.5, -0.25]), { product: 'physical-sandbox/openarm', xyz: [1.5, -0.25, 0], yaw: 0 });
+});
+
+test('the person\'s own PS.com records: each row opens its ref; signed out, offline or none, a line says why', () => {
+  assert.deepEqual(myRecordRows({ signedIn: true, rows: [{ ref: 'ada/walk', title: '歩く', version: '2' }, { ref: 'ada/turn', title: null, version: '1' }, { title: 'no ref' }] }), {
+    rows: [
+      { ref: 'ada/walk', label: '歩く', detail: 'ada/walk（バージョン 2）' },
+      { ref: 'ada/turn', label: 'ada/turn', detail: 'ada/turn（バージョン 1）' },
+    ],
+    note: null,
+  });
+  assert.deepEqual(myRecordRows({ signedIn: true, rows: [] }), { rows: [], note: ja('myRecordsNone') });
+  assert.deepEqual(myRecordRows({ rows: [], signedIn: false }), { rows: [], note: ja('myRecordsSignedOut') });
+  assert.deepEqual(myRecordRows({ rows: [], offline: true }), { rows: [], note: ja('myRecordsOffline') });
+  assert.deepEqual(myRecordRows(null), { rows: [], note: ja('myRecordsOffline') });
 });

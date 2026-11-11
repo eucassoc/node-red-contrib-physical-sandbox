@@ -119,6 +119,8 @@ test('the editor side of the plugin adds the sidebar tab: the pane in an iframe,
   assert.match(body, /physical-sandbox\/pane/);
   assert.match(body, /RED\.comms\.subscribe\('ps-pane\/#'/);
   assert.match(body, /別ウィンドウで開く/);
+  assert.doesNotMatch(body, /access_token=/, 'no token in an address: the pane is given it by postMessage');
+  assert.match(body, /ps-pane-token/);
 });
 
 test('GET /nodes lists the ps-in and ps-play node sets with their types, enabled', async () => {

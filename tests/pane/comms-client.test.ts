@@ -90,10 +90,46 @@ test('inside the editor it says ready to its parent and hears only the parent, o
   assert.deepEqual(heard, [['status', { recorded: 2 }]]);
 });
 
+test('inside the editor the token comes from the editor, before anything else, and from no one else', () => {
+  const listeners: any[] = [];
+  const parent = { postMessage() {} };
+  const win = { location: { origin: 'http://127.0.0.1:1881' }, parent, addEventListener: (_: string, fn: any) => listeners.push(fn), removeEventListener() {} };
+  const tokens: (string | null)[] = [];
+  listenToEditor(win, recorder().handlers, (token) => tokens.push(token));
+  listeners[0]({ origin: 'http://evil.example', source: parent, data: { type: 'ps-pane-token', token: 'X' } });
+  listeners[0]({ origin: 'http://127.0.0.1:1881', source: parent, data: { type: 'ps-pane-token', token: 'T' } });
+  listeners[0]({ origin: 'http://127.0.0.1:1881', source: parent, data: { type: 'ps-pane-token', token: null } });
+  listeners[0]({ origin: 'http://127.0.0.1:1881', source: parent, data: { type: 'ps-pane-token', token: 42 } });
+  assert.deepEqual(tokens, ['T', null, null]);
+});
+
+test('inside the editor nothing is heard before the token: it would start requests without it', () => {
+  const listeners: any[] = [];
+  const parent = { postMessage() {} };
+  const win = { location: { origin: 'http://o' }, parent, addEventListener: (_: string, fn: any) => listeners.push(fn), removeEventListener() {} };
+  const { heard, handlers } = recorder();
+  listenToEditor(win, handlers, () => undefined);
+  const status = { type: 'ps-pane-message', topic: 'ps-pane/status', data: { recorded: 1 } };
+  listeners[0]({ origin: 'http://o', source: parent, data: status });
+  listeners[0]({ origin: 'http://o', source: parent, data: { type: 'ps-pane-token', token: 'T' } });
+  listeners[0]({ origin: 'http://o', source: parent, data: status });
+  assert.deepEqual(heard, [['status', { recorded: 1 }]]);
+});
+
+test('the token is read at each request, so one that comes later goes with the requests after it', async () => {
+  const calls: any[] = [];
+  let token: string | null = null;
+  const api = createApi({ base: '/', token: () => token, fetchImpl: async (_url: string, init: any) => { calls.push(init.headers); return { ok: true, json: async () => ({}) }; } });
+  await api.get('scene');
+  token = 'T';
+  await api.get('scene');
+  assert.deepEqual(calls, [{}, { Authorization: 'Bearer T' }]);
+});
+
 test('every POST says it comes from the pane: JSON, or the pane\'s header (no body, a long record as text, the picture)', async () => {
   const calls: [string, any][] = [];
   const fetchImpl = async (url: string, init: any) => { calls.push([url, init]); return { ok: true, json: async () => ({ ok: 1 }) }; };
-  const api = createApi({ base: '/', token: 'T', fetchImpl });
+  const api = createApi({ base: '/', token: () => 'T', fetchImpl });
   await api.post('scene/place', { product: 'p' });
   await api.post('stream/stop');
   await api.post('stream/play', { record: {} }, { asText: true });
@@ -110,7 +146,7 @@ test('every POST says it comes from the pane: JSON, or the pane\'s header (no bo
 });
 
 test('a refusal comes back as a PaneError with the hub\'s words and reason', async () => {
-  const api = createApi({ base: '/red/', token: null, fetchImpl: async () => ({ ok: false, status: 409, json: async () => ({ error: '保存中です', reason: 'busy' }) }) });
+  const api = createApi({ base: '/red/', token: () => null, fetchImpl: async () => ({ ok: false, status: 409, json: async () => ({ error: '保存中です', reason: 'busy' }) }) });
   await assert.rejects(api.post('record/save', { mode: 'over' }), (e: unknown) => e instanceof PaneError && e.message === '保存中です' && e.reason === 'busy' && e.status === 409);
   assert.equal(api.url('scene'), '/red/physical-sandbox/scene');
 });

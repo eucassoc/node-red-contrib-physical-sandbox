@@ -1,6 +1,8 @@
 /**
  * The plugin's HTTP side, on Node-RED's admin app under `/physical-sandbox/`: reads need
- * `flows.read`, everything that changes something needs `flows.write`.
+ * `flows.read`, everything that changes something needs `flows.write`. The pane page and its
+ * static files are the exception: they are served to anyone who can reach the admin app, as the
+ * editor's own files are, with `Referrer-Policy: no-referrer`; the data they ask for is guarded.
  *
  * JSON bodies: Node-RED's admin app already reads `application/json` up to its `apiMaxLength`
  * (5 MB by default) before these routes; a bigger body (a long record to play) is sent with another
@@ -261,13 +263,18 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
 
   // ---- the pane page ----
 
-  app.get(`${P}/pane`, read, handle((req, res) => {
+  // The page and its code ask for no permission, as Node-RED's editor files do: they are static and
+  // carry nothing of the person's, and a page loaded in an iframe or a window cannot send a token
+  // (it would have to sit in the address). The page then sends the token with every data request.
+  const paneFile = { dotfiles: 'allow', headers: { 'Cache-Control': 'no-cache', 'Referrer-Policy': 'no-referrer' } };
+
+  app.get(`${P}/pane`, handle((req, res) => {
     const page = join(opts.paneDir, 'index.html');
     if (!existsSync(page)) throw new Answer(404, WORDS.noPane, 'no-pane');
-    res.sendFile(page, { dotfiles: 'allow', headers: { 'Cache-Control': 'no-cache' } });
+    res.sendFile(page, paneFile);
   }));
 
-  app.get(/^\/physical-sandbox\/pane\/static\/(.+)$/, read, handle((req, res) => {
+  app.get(/^\/physical-sandbox\/pane\/static\/(.+)$/, handle((req, res) => {
     const rel = String(req.params[0]);
     const parts = rel.split('/');
     if (parts.some((p) => p === '' || p === '.' || p === '..' || p.includes('\\') || p.includes('\0'))) throw new Answer(404, WORDS.noPane, 'not-found');
@@ -277,7 +284,7 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
       file = realpathSync(join(opts.paneDir, ...parts));
     } catch { throw new Answer(404, WORDS.noPane, 'not-found'); }
     if (!file.startsWith(rootReal + sep) || !statSync(file).isFile()) throw new Answer(404, WORDS.noPane, 'not-found');
-    res.sendFile(file, { dotfiles: 'allow', headers: { 'Cache-Control': 'no-cache' } });
+    res.sendFile(file, paneFile);
   }));
 
   // ---- the scene ----
@@ -397,10 +404,12 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
       newId = `${stem}-${n}`;
     }
 
+    // A box is drawn centred on its pose (PS.com devices/view.js): half its height up, it stands on the floor
+    const sizeM = kind === 'object' ? dimensionsOf(bundle) ?? [0.2, 0.2, 0.2] : null;
     const device: Device = {
       id: newId, product, owner: 'viewer', parent: 'site',
-      pose: { xyz: [xyz[0], xyz[1], 0], rpy: [0, 0, turn] },
-      ...(kind === 'object' ? { type: 'item', shape: { sizeM: dimensionsOf(bundle) ?? [0.2, 0.2, 0.2] } } : {}),
+      pose: { xyz: [xyz[0], xyz[1], sizeM ? sizeM[2] / 2 : 0], rpy: [0, 0, turn] },
+      ...(sizeM ? { type: 'item', shape: { sizeM } } : {}),
     };
     devices.push(device);
     names[newId] = newId;
@@ -453,6 +462,19 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
     const file = serveBundleFile(source, rest, roots);
     if (!file) throw new Answer(404, WORDS.noProduct, 'not-found');
     res.sendFile(file, { dotfiles: 'allow', headers: { 'Cache-Control': 'no-cache' } });
+  }));
+
+  // ---- the person's records on PS.com ----
+
+  app.get(`${P}/records/mine`, read, handle(async (req, res) => {
+    if (!hub.client.status().signedIn) { res.json({ rows: [], signedIn: false }); return; }
+    try {
+      res.json({ rows: await hub.client.myRecords(), signedIn: true });
+    } catch (e) {
+      if (e instanceof Offline) { res.json({ rows: [], offline: true }); return; }
+      if (e instanceof SignIn) { hub.refreshStatus(); res.json({ rows: [], signedIn: false }); return; } // the token was refused
+      throw e;
+    }
   }));
 
   // ---- the stream ----

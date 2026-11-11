@@ -55,6 +55,17 @@ export function playAgainBody(last: Json | null, status: PaneStatus | null): Jso
   return opened && 'ref' in opened ? { ref: `${opened.ref}:${opened.version}` } : null;
 }
 
+/** The rows of `GET records/mine` to open, or the line that says why there are none. */
+export function myRecordRows(answer: unknown): { rows: { ref: string; label: string; detail: string }[]; note: string | null } {
+  const got = answer as Json | null;
+  if (!got || got.offline === true) return { rows: [], note: ja('myRecordsOffline') };
+  if (got.signedIn === false) return { rows: [], note: ja('myRecordsSignedOut') };
+  const rows = (Array.isArray(got.rows) ? got.rows : [])
+    .filter((r: Json) => r && typeof r.ref === 'string' && r.ref && r.version != null)
+    .map((r: Json) => ({ ref: r.ref, label: typeof r.title === 'string' && r.title ? r.title : r.ref, detail: ja('myRecordRow', { ref: r.ref, version: r.version }) }));
+  return { rows, note: rows.length ? null : ja('myRecordsNone') };
+}
+
 export interface RecordsUi { setStatus(status: PaneStatus): void }
 
 export function mountRecordsUi(opts: {
@@ -103,7 +114,38 @@ export function mountRecordsUi(opts: {
   const stopButton = buttonOf('stop');
   const startButton = buttonOf('toStart');
   playRow.append(playButton, stopButton, startButton);
-  opts.playRoot.append(openHeading, refRow, fileRow, openedText, playRow, playingText);
+  const mineRow = el('div', 'ps-row');
+  const mineHeading = labelOf('myRecords', 'span');
+  const refreshButton = buttonOf('refreshList', 'ps-button ps-small');
+  mineRow.append(mineHeading, refreshButton);
+  const mineList = el('ul', 'ps-list ps-mine');
+  const mineNote = el('p', 'ps-hint');
+  opts.playRoot.append(openHeading, mineRow, mineList, mineNote, refRow, fileRow, openedText, playRow, playingText);
+
+  async function listMine(): Promise<void> {
+    let answer: Json | null;
+    try { answer = await api.get('records/mine'); } catch { answer = null; }
+    const { rows, note } = myRecordRows(answer);
+    mineList.replaceChildren();
+    for (const row of rows) {
+      const item = el('li', 'ps-record');
+      item.dataset.ref = row.ref;
+      const open = el('button', 'ps-link');
+      open.type = 'button';
+      open.textContent = row.label;
+      open.addEventListener('click', () => {
+        lastOpened = { ref: row.ref };
+        void play(lastOpened);
+      });
+      const detail = el('small', 'ps-source');
+      detail.textContent = row.detail;
+      item.append(open, ' ', detail);
+      mineList.append(item);
+    }
+    mineNote.textContent = note ?? '';
+    mineNote.hidden = !note;
+  }
+  refreshButton.addEventListener('click', () => { void listMine(); });
 
   async function play(body: Json, thenStop = false): Promise<void> {
     try {
@@ -176,7 +218,17 @@ export function mountRecordsUi(opts: {
   newForm.append(nameField, titleField, formRow);
 
   const unsentList = el('ul', 'ps-list ps-unsent');
-  opts.saveRoot.append(recordingRow, saveRow, newForm, unsentList);
+  const resendButton = buttonOf('resend', 'ps-button ps-small');
+  resendButton.hidden = true;
+  resendButton.addEventListener('click', async () => {
+    try {
+      const answer = await api.post('unsent/send');
+      say(ja('resent', { n: Array.isArray(answer.sent) ? answer.sent.length : 0 }));
+    } catch (e) {
+      fail(e);
+    }
+  });
+  opts.saveRoot.append(recordingRow, saveRow, newForm, unsentList, resendButton);
 
   clearButton.addEventListener('click', () => { api.post('stream/clear').catch(fail); });
 
@@ -273,6 +325,8 @@ export function mountRecordsUi(opts: {
     }
   });
 
+  let listedSignedIn: boolean | null = null;
+  let listedOpened = 'null';
   function setStatus(next: PaneStatus): void {
     status = next;
     openedText.textContent = openedLine(status);
@@ -291,21 +345,21 @@ export function mountRecordsUi(opts: {
     newButton.hidden = !offered.asNew;
 
     unsentList.replaceChildren();
-    for (const line of unsentLines(status)) {
+    const unsent = unsentLines(status);
+    for (const line of unsent) {
       const item = el('li', 'ps-error');
       item.dataset.unsent = line.name;
-      item.append(line.text, ' ');
-      const resend = buttonOf('resend', 'ps-button ps-small');
-      resend.addEventListener('click', async () => {
-        try {
-          const answer = await api.post('unsent/send');
-          say(ja('resent', { n: Array.isArray(answer.sent) ? answer.sent.length : 0 }));
-        } catch (e) {
-          fail(e);
-        }
-      });
-      item.append(resend);
+      item.textContent = line.text;
       unsentList.append(item);
+    }
+    resendButton.hidden = unsent.length === 0;
+
+    // The list of one's own records follows the login (and is fetched again after a save)
+    const signedInNow = Boolean(status.login?.signedIn);
+    if (signedInNow !== listedSignedIn || status.opened !== null && JSON.stringify(status.opened) !== listedOpened) {
+      listedSignedIn = signedInNow;
+      listedOpened = JSON.stringify(status.opened ?? null);
+      void listMine();
     }
 
     const login = status.login;

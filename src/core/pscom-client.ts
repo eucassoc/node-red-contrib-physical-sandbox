@@ -285,6 +285,23 @@ export class PsComClient {
     return { record, version, latest: latest ?? version, own: signed.signedIn && signed.handle === handle };
   }
 
+  /**
+   * The signed-in person's records, newest first as PS.com's search gives them (`owner=me`,
+   * `kind=record`, at most 500): `{ref: 'handle/name', title, version}`. SignIn when signed out.
+   */
+  async myRecords(): Promise<{ ref: string; title: string | null; version: string }[]> {
+    const token = this.kept()?.token;
+    if (typeof token !== 'string') throw new SignIn();
+    const body = await this.call('GET', '/api/catalog/search?owner=me&kind=record&limit=500', { token });
+    const items = Array.isArray(body?.items) ? body.items : [];
+    return items
+      .filter((i: Json) => isObject(i) && typeof i.handle === 'string' && typeof i.name === 'string' && i.latest_version != null)
+      .map((i: Json) => {
+        const title = isObject(i.display) ? i.display.ja || i.display.en : null;
+        return { ref: `${i.handle}/${i.name}`, title: typeof title === 'string' && title ? title : null, version: String(i.latest_version) };
+      });
+  }
+
   // ---- HTTP ----
 
   /** One request; the JSON answer, or the error it is. A 401 to a request with the token forgets the token. */

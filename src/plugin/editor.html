@@ -1,19 +1,21 @@
 <script type="text/javascript">
   // Editor side of the Physical Sandbox plugin: the sidebar tab holds the pane (an iframe on
   // physical-sandbox/pane) and forwards what the editor hears on ps-pane/# to it. The pane says
-  // "ready" when it listens; the retained scene, snapshot and status held here then go to it, so a
+  // "ready" when it listens; the editor's token, then the retained scene, snapshot and status held here go to it, so a
   // pane loaded after the editor subscribed starts where the others are.
   (function () {
     var FROM_EDITOR = 'ps-pane-message';
     var PANE_READY = 'ps-pane-ready';
+    var EDITOR_TOKEN = 'ps-pane-token';
     var RETAINED = { 'ps-pane/scene': true, 'ps-pane/snapshot': true, 'ps-pane/status': true };
+    // The pane's address, relative to the editor as the editor's own API calls are. The page needs
+    // no token to load; the iframe is handed the editor's token by postMessage (below), and a
+    // window of its own reads it where the editor keeps it. Never in the address.
+    var PANE_URL = 'physical-sandbox/pane';
 
-    // The pane's address (relative to the editor, as the editor's own API calls are). With
-    // adminAuth on, the editor's token goes along so the page itself can be fetched.
-    function paneUrl() {
+    function editorToken() {
       var tokens = RED.settings.get('auth-tokens');
-      var token = tokens && tokens.access_token;
-      return 'physical-sandbox/pane' + (token ? '?access_token=' + encodeURIComponent(token) : '');
+      return (tokens && tokens.access_token) || null;
     }
 
     RED.plugins.registerPlugin('physical-sandbox', {
@@ -26,7 +28,7 @@
           .text('別ウィンドウで開く ')
           .append($('<small style="opacity:.7"></small>').text('Open in a window'))
           .appendTo(bar)
-          .on('click', function () { window.open(paneUrl(), 'physical-sandbox-pane'); });
+          .on('click', function () { window.open(PANE_URL, 'physical-sandbox-pane'); });
         var iframe = $('<iframe class="ps-pane-frame" title="Physical Sandbox" style="flex:1;min-height:0;width:100%;border:0"></iframe>')
           .appendTo(content);
 
@@ -46,6 +48,8 @@
         window.addEventListener('message', function (event) {
           if (event.origin !== window.location.origin || event.source !== iframe[0].contentWindow) return;
           if (event.data && event.data.type === PANE_READY) {
+            var target = iframe[0].contentWindow;
+            if (target) target.postMessage({ type: EDITOR_TOKEN, token: editorToken() }, window.location.origin);
             for (var topic in held) if (Object.prototype.hasOwnProperty.call(held, topic)) post(topic, held[topic]);
           }
         });
@@ -53,7 +57,7 @@
           if (RETAINED[topic]) held[topic] = data;
           post(topic, data);
         });
-        iframe.attr('src', paneUrl());
+        iframe.attr('src', PANE_URL);
       },
     });
   })();

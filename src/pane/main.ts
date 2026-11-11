@@ -19,8 +19,14 @@ function storage(): Storage | null {
 }
 
 const adminRoot = adminRootOf(location.pathname);
-const token = tokenOf(storage(), adminRoot);
-const api = createApi({ base: adminRoot, token });
+const inEditor = window.parent !== window;
+/**
+ * The editor's token (null without adminAuth). In a window of its own the pane reads it where the
+ * editor keeps it (same origin); in the sidebar the editor hands it over first (see the end). It
+ * goes only in `Authorization` headers and in `/comms`' `{auth}`, never in an address.
+ */
+let token: string | null = inEditor ? null : tokenOf(storage(), adminRoot);
+const api = createApi({ base: adminRoot, token: () => token });
 const authHeaders = (): Record<string, string> => (token ? { Authorization: `Bearer ${token}` } : {});
 
 // ---- what the pane says ----
@@ -40,7 +46,12 @@ const stageBox = byId<HTMLDivElement>('ps-stage');
 const canvas = byId<HTMLCanvasElement>('ps-canvas');
 const overlay = document.getElementById('ps-overlay') as unknown as SVGSVGElement;
 
-/** A bundle the routes resolve, its files under Node-RED (the catalog's through the plugin). */
+/**
+ * A bundle the routes resolve, its files under Node-RED (the catalog's through the plugin).
+ * The bundle and its meshes are fetched with the token (fetchWithAuth). A texture is not:
+ * robot-build.js loads it with THREE.TextureLoader, which sends no header, so under adminAuth a
+ * textured robot is drawn without its texture (a known limit).
+ */
 async function resolveBundle(product: string) {
   const resolved = await api.get(`bundles/resolve?product=${encodeURIComponent(product)}`);
   const inNodeRed = (path: string) => `${adminRoot}${String(path).replace(/^\/+/, '')}`;
@@ -93,6 +104,7 @@ async function showBackground(bg: PaneScene['background'], force = false): Promi
     blob = await res.blob();
   } catch {
     say(ja('backgroundLost'), en('backgroundLost'));
+    if (backgroundKey === key) backgroundKey = null; // the next scene tries again
     return;
   }
   if (backgroundKey !== key) return; // another came meanwhile
@@ -178,7 +190,6 @@ const place = mountPlaceUi({
   floorPointAt: (x, y) => stage.floorPointAt(x, y),
   say,
 });
-void place.refresh();
 
 const playSection = byId<HTMLElement>('ps-play-section');
 playSection.append(labelOf('playback', 'h2'));
@@ -217,8 +228,17 @@ const handlers: PaneHandlers = {
   status(status) { records.setStatus(status as PaneStatus); },
 };
 
-if (window.parent !== window) listenToEditor(window, handlers);
-else connectComms({ url: commsUrlOf(location, adminRoot), token, handlers });
+// In the sidebar the editor sends its token before anything else: the robot list waits for it
+if (inEditor) {
+  let listed = false;
+  listenToEditor(window, handlers, (given) => {
+    token = given;
+    if (!listed) { listed = true; void place.refresh(); }
+  });
+} else {
+  connectComms({ url: commsUrlOf(location, adminRoot), token, handlers });
+  void place.refresh();
+}
 
 // For checking the page by hand and for the agent (part 2): the stage as it is
 (globalThis as any).psPane = { stage, scene: () => scene };

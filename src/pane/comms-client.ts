@@ -3,13 +3,13 @@
  *
  * Hearing: inside the editor's sidebar the editor forwards what it hears on `ps-pane/#`
  * (`RED.comms.subscribe` → `postMessage`); the iframe says `ready` once it listens and the
- * editor then sends the retained ones it holds. In a window of its own the pane opens Node-RED's
+ * editor then sends its token (null without adminAuth) and the retained ones it holds. In a window of its own the pane opens Node-RED's
  * `/comms` itself, sends `{auth: token}` first when the editor has a token (Node-RED keeps it in
  * `localStorage['auth-tokens' + suffix]`), and subscribes to `ps-pane/#`, which brings the retained
  * scene, snapshot and status at once.
  *
  * Talking: the routes under `physical-sandbox/`, every POST as JSON or with `X-PS-Pane: 1`, with
- * the editor's token when it has one.
+ * the editor's token when it has one, always as `Authorization: Bearer`, never in an address.
  */
 
 type Json = Record<string, any>;
@@ -18,6 +18,7 @@ export const PANE_TOPIC = 'ps-pane/#';
 /** What the iframe and the editor say to each other through postMessage. */
 export const FROM_EDITOR = 'ps-pane-message';
 export const PANE_READY = 'ps-pane-ready';
+export const EDITOR_TOKEN = 'ps-pane-token';
 
 export interface PaneHandlers {
   scene(scene: Json): void;
@@ -105,11 +106,19 @@ export function connectComms(opts: {
   };
 }
 
-/** Hear the hub through the editor that holds this iframe. */
-export function listenToEditor(win: any, handlers: PaneHandlers): { close(): void } {
+/** Hear the hub through the editor that holds this iframe; `onToken` is given the editor's token (or null). */
+export function listenToEditor(win: any, handlers: PaneHandlers, onToken?: (token: string | null) => void): { close(): void } {
+  // With onToken, what the editor forwards before its token is let go: it would start requests
+  // without the token. The editor sends the retained ones again right after the token.
+  let heard = !onToken;
   const onMessage = (event: { origin: string; source: unknown; data: any }) => {
     if (event.origin !== win.location.origin || event.source !== win.parent) return;
-    if (event.data?.type === FROM_EDITOR) dispatch(event.data.topic, event.data.data, handlers);
+    if (event.data?.type === FROM_EDITOR) {
+      if (heard) dispatch(event.data.topic, event.data.data, handlers);
+    } else if (event.data?.type === EDITOR_TOKEN) {
+      heard = true;
+      onToken?.(typeof event.data.token === 'string' && event.data.token ? event.data.token : null);
+    }
   };
   win.addEventListener('message', onMessage);
   win.parent.postMessage({ type: PANE_READY }, win.location.origin);
@@ -134,11 +143,14 @@ export interface Api {
   url(path: string): string;
 }
 
-/** The routes under `<base>physical-sandbox/`. */
-export function createApi(opts: { base: string; token: string | null; fetchImpl?: (url: string, init?: any) => Promise<any> }): Api {
+/** The routes under `<base>physical-sandbox/`; `token()` is read at each request. */
+export function createApi(opts: { base: string; token: () => string | null; fetchImpl?: (url: string, init?: any) => Promise<any> }): Api {
   const doFetch = opts.fetchImpl ?? ((url: string, init?: any) => fetch(url, init));
   const url = (path: string) => `${opts.base}physical-sandbox/${path}`;
-  const auth = (): Record<string, string> => (opts.token ? { Authorization: `Bearer ${opts.token}` } : {});
+  const auth = (): Record<string, string> => {
+    const token = opts.token();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
 
   async function answer(res: any): Promise<Json> {
     let body: any = null;

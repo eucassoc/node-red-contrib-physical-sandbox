@@ -12,6 +12,8 @@
  *   `unchanged` before the base is checked; `base` other than the latest is 409 `moved` with
  *   `latest`; `new=1` on an existing item is 409 `taken`; another handle is 404; an item that is
  *   not a record is 409 `not-a-record`. `failRecord` makes every record PUT answer it.
+ * - `GET /api/catalog/search?owner=me&kind=…` (Bearer) → `{items}` of the signed-in handle, newest
+ *   first, `display.ja` the title given to `seed`; 401 `signin` without the token.
  * - `GET /api/catalog/{h}/{n}`, `…/{v}/manifest`, `…/{v}/files/record.json`; a private item is
  *   404 without its owner's token.
  *
@@ -23,7 +25,7 @@ import { createHash } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 
 interface Version { raw: Buffer; manifest: Record<string, unknown> }
-interface Item { kind: string; visibility: 'private' | 'public'; versions: Map<string, Version>; latest: string | null }
+interface Item { kind: string; visibility: 'private' | 'public'; versions: Map<string, Version>; latest: string | null; title?: string }
 
 const VERSION = /^[a-z0-9][a-z0-9.-]{0,31}$/;
 
@@ -71,9 +73,9 @@ export class FakePsCom {
   }
 
   /** Put a record version straight into the store (as if saved elsewhere). */
-  seed(handle: string, name: string, version: string, record: unknown, opts: { visibility?: 'private' | 'public'; kind?: string } = {}): void {
+  seed(handle: string, name: string, version: string, record: unknown, opts: { visibility?: 'private' | 'public'; kind?: string; title?: string } = {}): void {
     const key = `${handle}/${name}`;
-    const item = this.items.get(key) ?? { kind: opts.kind ?? 'record', visibility: opts.visibility ?? 'private', versions: new Map(), latest: null };
+    const item = this.items.get(key) ?? { kind: opts.kind ?? 'record', visibility: opts.visibility ?? 'private', versions: new Map(), latest: null, ...(opts.title ? { title: opts.title } : {}) };
     this.items.set(key, item);
     this.store(item, handle, name, version, Buffer.from(JSON.stringify(record)));
   }
@@ -120,6 +122,8 @@ export class FakePsCom {
     if (method === 'POST' && path === '/api/vr/poll') return this.poll(body);
     if (method === 'GET' && path === '/api/handle') return signedIn ? [200, { handle: this.handle }] : [401, { error: 'signin' }];
 
+    if (method === 'GET' && path === '/api/catalog/search') return this.search(u.searchParams, signedIn);
+
     const parts = path.split('/').map(decodeURIComponent);
     if (parts.length < 5 || parts[1] !== 'api' || parts[2] !== 'catalog') return [404, { error: 'not-found' }];
     const [handle, name, ...rest] = parts.slice(3);
@@ -154,6 +158,20 @@ export class FakePsCom {
     } finally {
       this.pollsInFlight -= 1;
     }
+  }
+
+  /** `owner=me` (the signed-in handle's items, 401 signed out) by `kind`, newest first; else the public ones. */
+  private search(q: URLSearchParams, signedIn: boolean): [number, unknown] {
+    const me = q.get('owner') === 'me';
+    if (me && !signedIn) return [401, { error: 'signin' }];
+    const items = [...this.items.entries()]
+      .filter(([key, item]) => (me ? key.startsWith(`${this.handle}/`) : item.visibility === 'public') && (!q.get('kind') || item.kind === q.get('kind')) && item.latest)
+      .reverse()
+      .map(([key, item]) => {
+        const [handle, name] = key.split('/');
+        return { handle, name, kind: item.kind, display: { ja: item.title ?? null, en: null }, latest_version: item.latest, version: item.latest };
+      });
+    return [200, { items }];
   }
 
   private read(key: string, handle: string, name: string, rest: string[], owner: boolean): [number, unknown] {

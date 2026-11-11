@@ -69,7 +69,7 @@ async function setup(o: { catalogBase?: string; localDirs?: string[]; cacheRoot?
     const text = await res.text();
     let json: any = null;
     try { json = JSON.parse(text); } catch { /* not JSON */ }
-    return { status: res.status, json, text, type: res.headers.get('content-type') ?? '' };
+    return { status: res.status, json, text, type: res.headers.get('content-type') ?? '', referrer: res.headers.get('referrer-policy') };
   };
   return { red, hub, clock, base, call, userDir, close: async () => { hub.close(); await red.close(); } };
 }
@@ -78,8 +78,7 @@ test('reads ask for flows.read and everything that changes something for flows.w
   const s = await setup();
   try {
     const routes: [string, string, string][] = [
-      ['GET', '/physical-sandbox/pane', 'flows.read'],
-      ['GET', '/physical-sandbox/pane/static/main.js', 'flows.read'],
+      ['GET', '/physical-sandbox/records/mine', 'flows.read'],
       ['GET', '/physical-sandbox/scene', 'flows.read'],
       ['GET', '/physical-sandbox/scene/background', 'flows.read'],
       ['GET', '/physical-sandbox/machines', 'flows.read'],
@@ -101,6 +100,12 @@ test('reads ask for flows.read and everything that changes something for flows.w
     ];
     for (const [method, path] of routes) await s.call(method, path, method === 'POST' && !path.endsWith('background') ? {} : undefined);
     for (const [method, path, permission] of routes) assert.equal(s.red.permissions.get(`${method} ${path}`), permission, `${method} ${path}`);
+    // The page and its code are static, like the editor's own files: they ask for no permission,
+    // so the pane loads under adminAuth without a token in its address
+    for (const path of ['/physical-sandbox/pane', '/physical-sandbox/pane/static/main.js']) {
+      await s.call('GET', path);
+      assert.equal(s.red.permissions.has(`GET ${path}`), false, path);
+    }
   } finally { await s.close(); }
 });
 
@@ -292,11 +297,12 @@ test('place adds robots and boxes with ids <name>-<n>; placing an id again moves
     assert.equal(r.json.device.id, 'myarm-2');
     r = await s.call('POST', '/physical-sandbox/scene/place', { product: 'crate', xyz: [3, 0] });
     assert.deepEqual(r.json.device, {
-      id: 'crate-1', product: 'crate', owner: 'viewer', parent: 'site', pose: { xyz: [3, 0, 0], rpy: [0, 0, 0] },
+      id: 'crate-1', product: 'crate', owner: 'viewer', parent: 'site', pose: { xyz: [3, 0, 0.15], rpy: [0, 0, 0] },
       type: 'item', shape: { sizeM: [0.6, 0.4, 0.3] },
-    });
-    r = await s.call('POST', '/physical-sandbox/scene/place', { product: 'pallet', xyz: [4, 0] });
+    }, 'a box stands on the floor: its middle half its height up');
+    r = await s.call('POST', '/physical-sandbox/scene/place', { product: 'pallet', xyz: [4, 0, 9] });
     assert.deepEqual(r.json.device.shape, { sizeM: [0.2, 0.2, 0.2] });
+    assert.deepEqual(r.json.device.pose.xyz, [4, 0, 0.1]);
     // a catalog robot the listing called a machine is placed without fetching anything
     await s.call('GET', '/physical-sandbox/machines');
     r = await s.call('POST', '/physical-sandbox/scene/place', { product: 'physical-sandbox/so101:1', xyz: [5, 0], id: 'left' });
@@ -504,8 +510,10 @@ test('the pane page and its files are served from the pane folder only', async (
     r = await s.call('GET', '/physical-sandbox/pane');
     assert.equal(r.status, 200);
     assert.match(r.type, /text\/html/);
+    assert.equal(r.referrer, 'no-referrer');
     r = await s.call('GET', '/physical-sandbox/pane/static/main.js');
     assert.equal(r.text, 'export {}');
+    assert.equal(r.referrer, 'no-referrer');
     assert.equal((await s.call('GET', '/physical-sandbox/pane/static/%2e%2e/' + encodeURIComponent(outside.split('/').pop()!) + '/secret.js')).status, 404);
     assert.equal(existsSync(join(paneDir, 'missing.js')), false);
     assert.equal((await s.call('GET', '/physical-sandbox/pane/static/missing.js')).status, 404);
@@ -827,5 +835,36 @@ test('sending kept copies waits for a save under way, and a save waits for nothi
     held.open();
     fake.holdPuts = null;
     assert.equal((await sendingAgain).status, 200);
+  } finally { await s.close(); await fake.stop(); }
+});
+
+test('records/mine lists the signed-in person\'s records from PS.com; signed out or offline it says so with no rows', async () => {
+  const fake = await new FakePsCom().start();
+  fake.seed('ada', 'walk', '1', walkRecord, { title: '歩く' });
+  fake.seed('ada', 'walk', '2', walkRecord, { title: '歩く' });
+  fake.seed('ada', 'turn', '1', walkRecord);
+  fake.seed('ada', 'arm', '1', {}, { kind: 'machine' });
+  fake.seed('bob', 'other', '1', walkRecord, { visibility: 'public' });
+  const s = await setup({ catalogBase: fake.base });
+  try {
+    let r = await s.call('GET', '/physical-sandbox/records/mine');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json, { rows: [], signedIn: false });
+    assert.equal(fake.calls.some((c) => c.path.startsWith('/api/catalog/search')), false, 'nothing asked while signed out');
+
+    await s.hub.client.loginStart();
+    await s.hub.client.loginPoll();
+    r = await s.call('GET', '/physical-sandbox/records/mine');
+    assert.deepEqual(r.json, { signedIn: true, rows: [
+      { ref: 'ada/turn', title: null, version: '1' },
+      { ref: 'ada/walk', title: '歩く', version: '2' },
+    ] });
+    const asked = fake.calls.find((c) => c.path.startsWith('/api/catalog/search'))!;
+    assert.deepEqual(Object.fromEntries(new URL(asked.path, 'http://x').searchParams), { owner: 'me', kind: 'record', limit: '500' });
+    assert.equal(asked.auth, `Bearer ${fake.token}`);
+
+    await fake.stop();
+    r = await s.call('GET', '/physical-sandbox/records/mine');
+    assert.deepEqual(r.json, { rows: [], offline: true });
   } finally { await s.close(); await fake.stop(); }
 });
