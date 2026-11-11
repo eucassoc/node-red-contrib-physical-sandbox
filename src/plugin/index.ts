@@ -19,7 +19,12 @@ export default function physicalSandboxPlugin(RED: NodeAPI): void {
   const hub = createHub(red, { userDir, settings });
   // This file is bundled to dist/plugin/index.js; the pane is built into dist/pane
   registerRoutes(red, hub, { paneDir: join(__dirname, '..', 'pane') });
-  mountMcp(red, hub, { userDir });
+  // An MCP route that cannot be mounted (the key file cannot be made) turns MCP off, not the plugin
+  try {
+    mountMcp(red, hub, { userDir });
+  } catch (e) {
+    red.log?.warn?.(`physical-sandbox: MCP is off: ${(e as Error)?.message ?? e}`);
+  }
   const definition = {
     type: PLUGIN_ID,
     onadd(): void {},

@@ -5,13 +5,12 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { installBuiltPackage } from './helpers/built-package.js';
 
 const require = createRequire(import.meta.url);
-const repoRoot = resolve(fileURLToPath(import.meta.url), '../..');
 const nodeRedName = process.env.PS_NODE_RED || 'node-red';
 const nodeRedRequire = createRequire(require.resolve(`${nodeRedName}/package.json`));
 
@@ -20,22 +19,6 @@ let server: http.Server;
 let base: string;
 let userDir: string;
 let robotsDir: string;
-
-// Install the package as npm would: package.json plus the files it lists, under <userDir>/node_modules.
-async function installBuiltPackage(dir: string): Promise<string> {
-  const pkg = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
-  const target = join(dir, 'node_modules', pkg.name);
-  await mkdir(target, { recursive: true });
-  await cp(join(repoRoot, 'package.json'), join(target, 'package.json'));
-  for (const entry of pkg.files as string[]) {
-    await cp(join(repoRoot, entry), join(target, entry), { recursive: true });
-  }
-  await writeFile(
-    join(dir, 'package.json'),
-    JSON.stringify({ name: 'node-red-project', private: true, dependencies: { [pkg.name]: pkg.version } }, null, 2),
-  );
-  return target;
-}
 
 async function get(path: string, accept: string): Promise<{ status: number; body: string }> {
   const res = await fetch(base + path, { headers: { Accept: accept } });
@@ -246,6 +229,19 @@ test('an MCP client on this machine, with the key the plugin made in the userDir
     const answer: any = await client.callTool({ name: 'ps_status', arguments: {} });
     assert.equal(JSON.parse(answer.content[0].text).scene.site, 'smoke');
   } finally { await client.close(); }
-  const noKey = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }, body: '{}' });
+  const headers = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
+  const noKey = await fetch(url, { method: 'POST', headers, body: '{}' });
   assert.equal(noKey.status, 401);
+  // Node-RED's own JSON parser answers first on a body too large or not JSON: the route says so in JSON-RPC
+  const auth = { ...headers, Authorization: `Bearer ${key}` };
+  const big = await fetch(url, { method: 'POST', headers: auth, body: JSON.stringify({ pad: 'x'.repeat(5 * 1024 * 1024) }) });
+  assert.equal(big.status, 413);
+  const bigAnswer = await big.json();
+  assert.equal(bigAnswer.jsonrpc, '2.0');
+  assert.match(bigAnswer.error.message, /大きすぎます（5 MB まで） \/ The request is too large/);
+  const bad = await fetch(url, { method: 'POST', headers: auth, body: '{not json' });
+  assert.equal(bad.status, 400);
+  assert.equal((await bad.json()).error.code, -32700);
+  const browser = await fetch(url, { method: 'POST', headers: { ...auth, Origin: 'http://evil.example' }, body: '{}' });
+  assert.equal(browser.status, 403);
 });

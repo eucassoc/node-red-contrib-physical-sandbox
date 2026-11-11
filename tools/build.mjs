@@ -2,7 +2,7 @@
 // the editor .html files beside them, and the pane page (src/pane, when present) as one browser
 // ES module with three.js inside.
 import { build } from 'esbuild';
-import { cp, mkdir, readdir, rm } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,10 @@ const dist = join(root, 'dist');
 
 await rm(dist, { recursive: true, force: true });
 
-// Node-RED requires each file named in package.json "node-red"; dependencies are bundled in.
+// Node-RED requires each file named in package.json "node-red"; dev dependencies are bundled in,
+// package.json "dependencies" (the MCP SDK, zod) are not: npm installs them beside the package.
+const { dependencies = {} } = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+const external = Object.keys(dependencies).flatMap((name) => [name, `${name}/*`]);
 await build({
   absWorkingDir: root,
   entryPoints: {
@@ -26,6 +29,7 @@ await build({
   platform: 'node',
   format: 'cjs',
   target: 'node20',
+  external,
   logLevel: 'warning',
 });
 

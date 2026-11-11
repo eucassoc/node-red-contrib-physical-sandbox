@@ -3,7 +3,7 @@
  *
  * - `httpAdmin` is a real express app (the one Node-RED uses), with no body parser in front, so
  *   the routes read their own bodies (`adminJsonParser` puts Node-RED's 5 MB JSON parser in front);
- *   `listen()` serves it on a free port.
+ *   `listen()` serves it on a free port. With `fakeRemote`, `X-Test-Remote` sets the socket's address.
  * - `comms.publish` keeps the retained messages per topic and sends every message to every pane,
  *   as Node-RED's runtime comms does (each message goes out as JSON); `pane()` subscribes a new one,
  *   which is sent the retained messages at once.
@@ -21,12 +21,20 @@ const express = require('express');
 
 export interface Pane { received: { topic: string; data: any }[]; latest(topic: string): any }
 
-export function fakeRed(opts: { userDir: string; settings?: Record<string, unknown>; adminJsonParser?: boolean }) {
+export function fakeRed(opts: { userDir: string; settings?: Record<string, unknown>; adminJsonParser?: boolean; fakeRemote?: boolean }) {
   const retained = new Map<string, string>();
   const panes: Pane[] = [];
   const published: { topic: string; data: any; retain: boolean }[] = [];
   const permissions = new Map<string, string>();
   const app = express();
+  // `X-Test-Remote: <address>` makes a request look as if its socket came from there (before anything else runs)
+  if (opts.fakeRemote) {
+    app.use((req: any, _res: any, next: () => void) => {
+      const remote = req.headers['x-test-remote'];
+      if (typeof remote === 'string') Object.defineProperty(req.socket, 'remoteAddress', { value: remote, configurable: true });
+      next();
+    });
+  }
   // Node-RED's own JSON parser in front of every admin route (editor-api: apiMaxLength, 5 MB by default)
   // ('test' keeps express from printing the 413 it answers)
   if (opts.adminJsonParser) { app.set('env', 'test'); app.use(express.json({ limit: '5mb' })); }

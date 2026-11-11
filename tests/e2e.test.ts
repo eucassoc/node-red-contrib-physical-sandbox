@@ -8,15 +8,14 @@ import { createRequire } from 'node:module';
 import http from 'node:http';
 import { createServer, type Server } from 'node:net';
 import type { AddressInfo } from 'node:net';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { Aedes } from 'aedes';
 import { FakePsCom } from './helpers/fake-pscom.js';
+import { installBuiltPackage } from './helpers/built-package.js';
 
 const require = createRequire(import.meta.url);
-const repoRoot = resolve(fileURLToPath(import.meta.url), '../..');
 
 let RED: any;
 let httpServer: http.Server;
@@ -26,16 +25,6 @@ let fake: FakePsCom;
 let base: string;
 let userDir: string;
 let brokerPort: number;
-
-/** Install the package as npm would: package.json plus the files it lists, under <userDir>/node_modules. */
-async function installBuiltPackage(dir: string): Promise<void> {
-  const pkg = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
-  const target = join(dir, 'node_modules', pkg.name);
-  await mkdir(target, { recursive: true });
-  await cp(join(repoRoot, 'package.json'), join(target, 'package.json'));
-  for (const entry of pkg.files as string[]) await cp(join(repoRoot, entry), join(target, entry), { recursive: true });
-  await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'node-red-project', private: true, dependencies: { [pkg.name]: pkg.version } }));
-}
 
 before(async () => {
   fake = await new FakePsCom().start();

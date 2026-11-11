@@ -3,14 +3,16 @@
  * `/physical-sandbox/mcp` (Streamable HTTP, stateless, JSON answers): `POST` carries one JSON-RPC
  * message; `GET` and `DELETE` are answered 405 (no stream, no session).
  *
- * Who may use it: a request from this machine (the socket's address is loopback) carrying
- * `Authorization: Bearer <key>`, the key in `<userDir>/physical-sandbox/mcp-key` (mcp-key.ts). It
- * does not use Node-RED's adminAuth (a bridge to the agent cannot hold an editor token), and the
- * pane's write guard (JSON or X-PS-Pane) does not apply: the key is its guard.
+ * Who may use it: a request from this machine (the socket's address is loopback; X-Forwarded-For
+ * and Host are not looked at), with no `Origin` (a page in a browser sends one, also after a DNS
+ * rebinding; MCP clients and bridges send none), carrying `Authorization: Bearer <key>`, the key in
+ * `<userDir>/physical-sandbox/mcp-key` (mcp-key.ts). It does not use Node-RED's adminAuth (a
+ * bridge to the agent cannot hold an editor token), and the pane's write guard (JSON or X-PS-Pane)
+ * does not apply: the key is its guard.
  *
  * The body: Node-RED's admin app already reads `application/json` up to its `apiMaxLength` (5 MB
- * by default) and answers 413 itself above that; any other body is read here, up to
- * MCP_BODY_LIMIT, and a bigger one is answered 413 at once.
+ * by default); its errors (too large, not JSON) are answered here in JSON-RPC instead of its HTML
+ * page. Any other body is read here, up to MCP_BODY_LIMIT, and a bigger one is answered 413 at once.
  */
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -29,7 +31,9 @@ const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 // What the caller is told: the agent passes it on to the person, who may read either language
 export const MCP_WORDS = {
   notHere: 'この Node-RED を動かしている PC の中からだけ接続できます / Only an MCP client on the machine running this Node-RED may connect',
-  badKey: (file: string) => `MCP の鍵が違います。${file} の中身を Authorization: Bearer に指定してください / The MCP key is missing or wrong: send the contents of ${file} as Authorization: Bearer`,
+  fromBrowser: 'ブラウザのページからは接続できません / Requests from a browser page (with an Origin header) are refused',
+  badKey: 'MCP の鍵が違います。Node-RED のユーザーディレクトリにある physical-sandbox/mcp-key の中身を Authorization: Bearer に指定してください'
+    + ' / The MCP key is missing or wrong: send the contents of physical-sandbox/mcp-key in the Node-RED user directory as Authorization: Bearer',
   tooLarge: '送られた内容が大きすぎます（5 MB まで） / The request is too large (5 MB at most)',
   notJson: '送られた内容を JSON として読み込めませんでした / The request is not JSON',
   failed: 'MCP の処理に失敗しました / Internal server error',
@@ -75,7 +79,9 @@ function keyCheck(key: string): (header: unknown) => boolean {
 export function mountMcp(RED: any, hub: Hub, opts: { userDir: string }): { newServer: () => McpServer } {
   const app = RED.httpAdmin;
   const keyFile = keyFileIn(opts.userDir);
-  const keyMatches = keyCheck(ensureKey(opts.userDir));
+  const key = ensureKey(opts.userDir);
+  if (!/^[0-9a-f]{64}$/i.test(key)) RED.log?.warn?.(`physical-sandbox: the MCP key in ${keyFile} is not 64 hex characters (32 random bytes); it is used as it is`);
+  const keyMatches = keyCheck(key);
 
   /** A server with every tool: one per request, as a stateless transport needs (a server holds one transport). */
   const newServer = (): McpServer => {
@@ -84,18 +90,23 @@ export function mountMcp(RED: any, hub: Hub, opts: { userDir: string }): { newSe
     return server;
   };
 
-  /** This machine first (another machine is told no before the key is looked at), then the key. */
-  const guard = (req: any, res: any, next: () => void): void => {
+  /**
+   * Whether a request is refused (and it is answered so): this machine first (another machine is
+   * told no before the key is looked at), then no Origin, then the key.
+   */
+  const refused = (req: any, res: any): boolean => {
     if (!LOOPBACK.has(String(req.socket?.remoteAddress ?? ''))) {
       res.status(403).json(rpcError(-32001, MCP_WORDS.notHere));
-      return;
+    } else if (req.headers?.origin !== undefined) {
+      res.status(403).json(rpcError(-32001, MCP_WORDS.fromBrowser));
+    } else if (!keyMatches(req.headers?.authorization)) {
+      res.status(401).set('WWW-Authenticate', 'Bearer').json(rpcError(-32001, MCP_WORDS.badKey));
+    } else {
+      return false;
     }
-    if (!keyMatches(req.headers?.authorization)) {
-      res.status(401).set('WWW-Authenticate', 'Bearer').json(rpcError(-32001, MCP_WORDS.badKey(keyFile)));
-      return;
-    }
-    next();
+    return true;
   };
+  const guard = (req: any, res: any, next: () => void): void => { if (!refused(req, res)) next(); };
 
   app.post(MCP_ROUTE, guard, async (req: any, res: any) => {
     try {
@@ -119,6 +130,22 @@ export function mountMcp(RED: any, hub: Hub, opts: { userDir: string }): { newSe
   const notAllowed = (_req: any, res: any) => { res.status(405).set('Allow', 'POST').json(rpcError(-32000, 'Method not allowed.')); };
   app.get(MCP_ROUTE, guard, notAllowed);
   app.delete(MCP_ROUTE, guard, notAllowed);
+
+  // Node-RED's own JSON parser runs before every admin route: its errors on this route are answered
+  // in JSON-RPC (after the same checks), not with express's HTML page. The parser sits in the
+  // editor's admin app, and RED.httpAdmin is the runtime's app mounted inside it at '/' (express
+  // keeps the outer one as `parent`): an error there skips the inner app, so the handler goes outside.
+  const errorApp = app.parent ?? app;
+  errorApp.use(MCP_ROUTE, (err: any, req: any, res: any, next: (e?: unknown) => void) => {
+    if (res.headersSent) { next(err); return; }
+    if (err?.type === 'entity.too.large') {
+      if (!refused(req, res)) res.status(413).json(rpcError(-32000, MCP_WORDS.tooLarge));
+    } else if (err?.type === 'entity.parse.failed') {
+      if (!refused(req, res)) res.status(400).json(rpcError(-32700, MCP_WORDS.notJson));
+    } else {
+      next(err);
+    }
+  });
 
   RED.log?.info?.(`physical-sandbox: MCP for agents on this machine at ${MCP_ROUTE} under the admin root; key in ${keyFile}`);
   return { newServer };
