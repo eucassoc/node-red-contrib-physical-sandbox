@@ -47,9 +47,9 @@ export const WORDS = {
   notPicture: '背景には画像（PNG・JPEG・WebP）か動画（MP4・WebM・QuickTime）を選択してください',
   noBackground: '背景は選択されていません',
   badFloor: '床の角 4 つ（映像の上の位置と映像の大きさ）と、角 1→2・角 2→3 の長さ（m）を指定してください',
-  reversed: '角の順番が逆です。角 1 から、同じ回り方で指定し直してください',
+  reversed: '角の順番が逆です。角 1 から、同じ回り方でもう一度指定してください',
   newReversed: '床の角の順番が逆回りです。映像の上で、角 1 から時計回りにもう一度指定してください',
-  flat: '床の遠近が足りず画角が決まりません。カメラをもっと見下ろす位置に置いて、角を指定し直してください',
+  flat: '床の遠近が足りず画角を求められません。カメラをもっと見下ろす位置に置いて、角をもう一度指定してください',
   badPlace: 'ロボットと置く位置（x, y）を指定してください',
   idTaken: 'その名前はもう使われています。別の名前を指定してください',
   noDevice: 'その名前のロボットはありません',
@@ -121,7 +121,8 @@ function refuseTooLarge(req: any, res: any, error: string): void {
   const socket = req.socket;
   res.on('finish', () => {
     socket?.end?.();
-    setTimeout(() => req.destroy(), REFUSED_GRACE_MS);
+    const cut = setTimeout(() => req.destroy(), REFUSED_GRACE_MS);
+    cut.unref?.(); // never keeps Node-RED from stopping
   });
   res.status(413).json({ error, reason: 'too-large' });
 }

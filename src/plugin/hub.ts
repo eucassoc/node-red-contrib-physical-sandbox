@@ -74,8 +74,13 @@ export interface Hub {
   scene(): Scene;
   /** Change some of the scene's fields; kept on disk and sent to the panes. */
   setScene(patch: Partial<Scene>): Scene;
-  /** One message into the stream; false (and nothing else happens) when it is not one or is older. */
-  push(message: unknown, from: From): boolean;
+  /**
+   * One message into the stream; false (and nothing else happens) when it is not one or is older.
+   * A `retained` one (the broker's last message, given again on subscribing) moves the panes and
+   * the latest states but is not kept in the buffer: it is not something that happened now, and
+   * it must not take the place of an opened record's trace.
+   */
+  push(message: unknown, from: From, opts?: { retained?: boolean }): boolean;
   /** Play a record's state messages to the panes in time (not into the buffer); a play under way stops first. */
   play(record: unknown, opts?: { loop?: boolean; speed?: number; source?: string }): { count: number; duration: number };
   stop(): void;
@@ -88,7 +93,7 @@ export interface Hub {
   publishStatus(): void;
   /** Read the unsent list and the login again (after a save, a send, a login), then send the status. */
   refreshStatus(): void;
-  /** Run one save at a time: while one is under way another is refused with `Busy`. */
+  /** Run one save at a time: while a save or a send of kept copies is under way it is refused with `Busy`. */
   exclusiveSave<T>(fn: () => Promise<T>): Promise<T>;
   /** Open a record: its scene (keeping the background), its states as the stream, and it is the opened record. */
   open(record: Json, opened: Opened): Scene;
@@ -98,7 +103,7 @@ export interface Hub {
   /** Whether the scene's floor is the opened record's: the corners must then be clicked in its order. */
   floorIsKnown(): boolean;
   setAgentFrames(on: boolean): void;
-  /** Send the kept copies (at start, after a login, on 再送信する). */
+  /** Send the kept copies (at start, after a login, on 再送信する), after any save under way (one at a time with saves). */
   sendUnsent(): Promise<SendAllResult>;
   close(): void;
 }
@@ -286,14 +291,14 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     tickTimer = clock.setTimeout(() => { tickTimer = null; tick(); }, wait);
   }
 
-  function push(raw: unknown, from: From): boolean {
+  function push(raw: unknown, from: From, opts: { retained?: boolean } = {}): boolean {
     const message = validMessage(raw);
     if (!message) return false;
     const topic = parseTopic(message.topic)!;
     if (topic.kind === 'state') {
       const type = isItemTopic(topic.id, message.payload) ? 'item' : 'mover';
       if (!applyState(store, { id: message.topic, type }, message.payload)) return false;
-      if (from !== 'record') keep(message);
+      if (from !== 'record' && opts.retained !== true) keep(message);
     }
     publish(STATE_TOPIC, { ...message, from }, false);
     if (topic.kind === 'state') scheduleTick();
@@ -449,23 +454,34 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     publishStatus();
   }
 
-  let saving = false;
-  async function exclusiveSave<T>(fn: () => Promise<T>): Promise<T> {
-    if (saving) throw new Busy();
-    saving = true;
+  // One save or one send of kept copies at a time: a kept copy over a record must not race a
+  // 上書き保存 of the same record. A save finding the gate taken is refused; a send waits.
+  let gate: Promise<void> | null = null;
+  async function throughGate<T>(fn: () => Promise<T>): Promise<T> {
+    let release!: () => void;
+    gate = new Promise<void>((done) => { release = done; });
     try {
       return await fn();
     } finally {
-      saving = false;
+      gate = null;
+      release();
     }
   }
 
+  async function exclusiveSave<T>(fn: () => Promise<T>): Promise<T> {
+    if (gate) throw new Busy();
+    return throughGate(fn);
+  }
+
   async function sendUnsent(): Promise<SendAllResult> {
-    try {
-      return await sendAll(dirs.unsent, sender);
-    } finally {
-      refreshStatus();
-    }
+    while (gate) await gate;
+    return throughGate(async () => {
+      try {
+        return await sendAll(dirs.unsent, sender);
+      } finally {
+        refreshStatus();
+      }
+    });
   }
 
   function close(): void {

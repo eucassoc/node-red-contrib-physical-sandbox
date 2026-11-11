@@ -204,7 +204,7 @@ test('floor: a new floor or a record\'s floor clicked the other way round is ref
     r = await s.call('POST', '/physical-sandbox/scene/floor', { pixels: [q1, q4, q3, q2], edgesM: [4, 4], width: WIDTH, height: HEIGHT });
     assert.equal(r.status, 422);
     assert.equal(r.json.reason, 'mirrored');
-    assert.equal(r.json.error, '角の順番が逆です。角 1 から、同じ回り方で指定し直してください');
+    assert.equal(r.json.error, '角の順番が逆です。角 1 から、同じ回り方でもう一度指定してください');
     assert.equal(s.hub.scene().camera, null);
     r = await s.call('POST', '/physical-sandbox/scene/floor', { pixels: [q1, q2, q3, q4], width: WIDTH, height: HEIGHT });
     assert.equal(r.status, 200, r.text);
@@ -701,7 +701,10 @@ function rawPost(base: string, path: string, headers: Record<string, string | nu
       res.on('data', (c) => parts.push(c));
       // the server cuts the connection a while after its answer: done when both have happened
       res.on('end', () => { ended = true; done(); });
-      done = () => { if (ended && closed) resolve({ status: res.statusCode ?? 0, body: Buffer.concat(parts).toString('utf8'), written, closed }); };
+      done = () => {
+        if (!(ended && closed)) return;
+        resolve({ status: res.statusCode ?? 0, body: Buffer.concat(parts).toString('utf8'), written, closed });
+      };
     });
     // writing on after the answer fails once the server cuts the connection: that is expected
     req.on('error', (e) => { if (!/EPIPE|ECONNRESET/.test(String((e as NodeJS.ErrnoException).code))) reject(e); });
@@ -719,6 +722,9 @@ function rawPost(base: string, path: string, headers: Record<string, string | nu
 }
 
 test('a body over the limit is answered 413 at once and no more of it is read', { timeout: 20_000 }, async () => {
+  // The server's timer that cuts a refused connection is unref'd (it never keeps Node-RED from
+  // stopping), and a paused socket keeps no process alive: this keeps the test's alive meanwhile
+  const alive = setInterval(() => {}, 100);
   const s = await setup();
   try {
     // Content-Length already over: answered before the body is sent
@@ -735,10 +741,89 @@ test('a body over the limit is answered 413 at once and no more of it is read', 
     assert.equal(JSON.parse(r.body).error, WORDS.tooLarge);
     assert.equal(r.closed, true);
     assert.ok(sent < 200, `the server stopped reading (${sent} MB offered)`);
-  } finally { await s.close(); }
+  } finally { await s.close(); clearInterval(alive); }
 });
 
 test('a background name keeps no .. in it', () => {
   assert.equal(safeName('../../a..b.png'), 'a.b.png');
   assert.equal(safeName('..'), 'background');
+});
+
+test('every sentence shown to people keeps the package\'s wording (no 直す・決める・読む・機体・絵・版)', async () => {
+  const banned = /直す|直し|決め|決ま|読む|読ん|機体|絵|版/;
+  const japanese = /[぀-ヿ一-鿿]/;
+  const sentences: [string, string][] = Object.entries(WORDS).map(([k, v]) => [`WORDS.${k}`, v]);
+  for (const [file, mod] of [['unsent', await import('../src/core/unsent.js')], ['pscom-client', await import('../src/core/pscom-client.js')]] as const) {
+    for (const [k, v] of Object.entries(mod)) if (typeof v === 'string' && japanese.test(v)) sentences.push([`${file}.${k}`, v]);
+  }
+  // and every Japanese string literal in the plugin's own sources (comments left out)
+  for (const dir of ['src/core', 'src/plugin', 'src/nodes']) {
+    const root = join(import.meta.dirname, '..', dir);
+    if (!existsSync(root)) continue;
+    for (const file of readdirSync(root).filter((f) => f.endsWith('.ts'))) {
+      const code = readFileSync(join(root, file), 'utf8').split('\n').filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)).join('\n');
+      for (const m of code.matchAll(/'[^'\n]*'|`[^`]*`/g)) if (japanese.test(m[0])) sentences.push([`${dir}/${file}`, m[0]]);
+    }
+  }
+  assert.ok(sentences.length > 30, `${sentences.length} sentences found`);
+  for (const [where, sentence] of sentences) assert.doesNotMatch(sentence.replaceAll('読み込', ''), banned, `${where}: ${sentence}`);
+});
+
+test('a retained state moves the panes but does not take the place of the opened record\'s trace', async () => {
+  const fake = await new FakePsCom().start();
+  fake.seed('ada', 'two', '1', twoRecord);
+  const s = await setup({ catalogBase: fake.base });
+  try {
+    await signedInWith(fake, s, 'two');
+    assert.equal(s.hub.push({ topic: 'ps/local/arm/state', payload: { at: s.clock.now() + 10_000, joints: { j: 7 } } }, 'mqtt', { retained: true }), true);
+    assert.deepEqual(s.red.published.filter((p) => p.topic === 'ps-pane/state').at(-1)?.data.payload, { at: s.clock.now() + 10_000, joints: { j: 7 } });
+    s.clock.advance(100);
+    assert.ok(s.red.retained('ps-pane/snapshot').some((m: any) => m.payload.joints?.j === 7), 'the latest state has it');
+    const saved = await s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
+    assert.deepEqual([saved.json.saved, saved.json.version, saved.json.unchanged], [true, '1', true]);
+  } finally { await s.close(); await fake.stop(); }
+});
+
+test('sending kept copies waits for a save under way, and a save waits for nothing but is refused while they are sent', { timeout: 20_000 }, async () => {
+  const fake = await new FakePsCom().start();
+  fake.seed('ada', 'walk', '1', walkRecord);
+  const s = await setup({ catalogBase: fake.base });
+  try {
+    await signedInWith(fake, s, 'walk');
+    // a copy kept earlier, over the same record
+    mkdirSync(s.hub.dirs.unsent, { recursive: true });
+    writeFileSync(join(s.hub.dirs.unsent, 'walk.record.json'), JSON.stringify({ ...walkRecord, name: 'kept' }));
+    writeFileSync(join(s.hub.dirs.unsent, 'walk.send.json'), JSON.stringify({ ref: 'ada/walk', mode: 'over', base: '1' }));
+    s.hub.push({ topic: 'ps/local/arm/state', payload: { at: s.clock.now(), joints: { j: 5 } } }, 'mqtt');
+
+    let held = gate();
+    fake.holdPuts = held.wait();
+    const saving = s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
+    await until(() => fake.putsWaiting === 1, 'the save at PS.com');
+    const sending = s.hub.sendUnsent();
+    await new Promise((done) => setTimeout(done, 50));
+    assert.equal(fake.putsWaiting, 1, 'the kept copy waits for the save');
+    held.open();
+    fake.holdPuts = null;
+    assert.deepEqual([(await saving).json.saved, (await saving).json.version], [true, '2']);
+    await sending;
+    // the save went alone: the older kept copy over the same record was dropped by it, never sent
+    assert.equal(fake.calls.filter((c) => c.method === 'PUT').length, 1);
+    assert.deepEqual(pending(s.hub.dirs.unsent), []);
+    assert.equal(fake.record('ada', 'walk', '2').traces[0].samples[0].joints.j, 5, 'version 2 is the save');
+    assert.equal(fake.record('ada', 'walk', '3'), undefined);
+
+    // while kept copies are being sent, a save is refused as busy
+    writeFileSync(join(s.hub.dirs.unsent, 'again.record.json'), JSON.stringify(walkRecord));
+    writeFileSync(join(s.hub.dirs.unsent, 'again.send.json'), JSON.stringify({ ref: 'again', mode: 'new', base: null }));
+    held = gate();
+    fake.holdPuts = held.wait();
+    const sendingAgain = s.call('POST', '/physical-sandbox/unsent/send');
+    await until(() => fake.putsWaiting === 1, 'the kept copy at PS.com');
+    const refused = await s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
+    assert.equal(refused.json.reason, 'busy');
+    held.open();
+    fake.holdPuts = null;
+    assert.equal((await sendingAgain).status, 200);
+  } finally { await s.close(); await fake.stop(); }
 });
