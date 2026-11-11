@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import http from 'node:http';
 import { createHub } from '../src/plugin/hub.js';
 import { registerRoutes, safeName, WORDS } from '../src/plugin/routes.js';
+import { WORDS as PANE_WORDS } from '../src/pane/words.js';
 import { readSettings } from '../src/plugin/settings.js';
 import { pending } from '../src/core/unsent.js';
 import { intrinsicsFromFov, extrinsicsFromPose, projectPoint } from '../src/pscom/camera-model.js';
@@ -753,11 +754,12 @@ test('every sentence shown to people keeps the package\'s wording (no 直す・�
   const banned = /直す|直し|決め|決ま|読む|読ん|機体|絵|版/;
   const japanese = /[぀-ヿ一-鿿]/;
   const sentences: [string, string][] = Object.entries(WORDS).map(([k, v]) => [`WORDS.${k}`, v]);
+  for (const [k, v] of Object.entries(PANE_WORDS)) sentences.push([`pane WORDS.${k}`, v.ja]);
   for (const [file, mod] of [['unsent', await import('../src/core/unsent.js')], ['pscom-client', await import('../src/core/pscom-client.js')]] as const) {
     for (const [k, v] of Object.entries(mod)) if (typeof v === 'string' && japanese.test(v)) sentences.push([`${file}.${k}`, v]);
   }
   // and every Japanese string literal in the plugin's own sources (comments left out)
-  for (const dir of ['src/core', 'src/plugin', 'src/nodes']) {
+  for (const dir of ['src/core', 'src/plugin', 'src/nodes', 'src/pane']) {
     const root = join(import.meta.dirname, '..', dir);
     if (!existsSync(root)) continue;
     for (const file of readdirSync(root).filter((f) => f.endsWith('.ts'))) {

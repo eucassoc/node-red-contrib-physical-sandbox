@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Physical Sandbox</title>
+  <style>
+    :root {
+      --ps-ink: #1f2933;
+      --ps-muted: #66788a;
+      --ps-line: #d5dde6;
+      --ps-paper: #ffffff;
+      --ps-panel: #f5f7fa;
+      --ps-accent: #1657a8;
+      --ps-error: #c62828;
+      --ps-corner: #ff9a3c;
+      color-scheme: light;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", "Segoe UI", sans-serif;
+      color: var(--ps-ink);
+      background: var(--ps-panel);
+      display: flex;
+      flex-direction: column;
+    }
+    #ps-stage {
+      position: relative;
+      flex: none;
+      height: 46vh;
+      min-height: 180px;
+      background: #e7eef7;
+      overflow: hidden;
+      border-bottom: 1px solid var(--ps-line);
+    }
+    #ps-stage > .ps-background, #ps-overlay { position: absolute; pointer-events: none; }
+    #ps-stage > .ps-background { object-fit: fill; }
+    #ps-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+    #ps-stage.ps-picking #ps-canvas { cursor: crosshair; }
+    #ps-overlay { overflow: visible; }
+    .ps-floor-corner { fill: var(--ps-corner); stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
+    .ps-floor-edge { fill: none; stroke: var(--ps-corner); }
+    .ps-floor-number { fill: #fff; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+    #ps-panel { flex: 1; overflow: auto; padding: 8px 10px 24px; }
+    #ps-message { margin: 0; padding: 6px 10px; min-height: 1.5em; background: var(--ps-paper); border-bottom: 1px solid var(--ps-line); }
+    #ps-message:empty { display: none; }
+    section { padding: 8px 0; border-bottom: 1px solid var(--ps-line); }
+    section:last-child { border-bottom: 0; }
+    h2, h3 { margin: 0 0 6px; font-size: 13px; }
+    h3 { font-size: 12px; color: var(--ps-muted); }
+    .ps-en { color: var(--ps-muted); font-size: 0.85em; font-weight: 400; }
+    .ps-button .ps-en { color: inherit; opacity: 0.7; }
+    .ps-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; }
+    .ps-button {
+      font: inherit;
+      padding: 3px 10px;
+      border: 1px solid var(--ps-line);
+      border-radius: 4px;
+      background: var(--ps-paper);
+      color: var(--ps-ink);
+      cursor: pointer;
+    }
+    .ps-button:hover:not(:disabled) { border-color: var(--ps-accent); }
+    .ps-button:disabled { opacity: 0.45; cursor: default; }
+    .ps-primary { background: var(--ps-accent); border-color: var(--ps-accent); color: #fff; }
+    .ps-small { padding: 1px 6px; font-size: 12px; }
+    .ps-file { display: inline-block; }
+    .ps-file input { display: none; }
+    .ps-field { display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
+    .ps-field input { font: inherit; padding: 3px 6px; border: 1px solid var(--ps-line); border-radius: 4px; }
+    input[type="text"] { font: inherit; padding: 3px 6px; border: 1px solid var(--ps-line); border-radius: 4px; min-width: 0; flex: 1; }
+    .ps-switch { display: flex; gap: 4px; align-items: center; cursor: pointer; }
+    .ps-prompt { margin: 4px 0; color: var(--ps-accent); }
+    .ps-hint, .ps-line { margin: 4px 0; }
+    .ps-hint { color: var(--ps-muted); }
+    .ps-list { list-style: none; margin: 4px 0; padding: 0; }
+    .ps-list li { padding: 4px 6px; border: 1px solid var(--ps-line); border-radius: 4px; background: var(--ps-paper); margin: 3px 0; }
+    .ps-machine { cursor: grab; }
+    .ps-source { color: var(--ps-muted); }
+    .ps-empty { color: var(--ps-muted); }
+    .ps-error, .ps-list li.ps-error { color: var(--ps-error); }
+    [hidden] { display: none !important; }
+    #ps-side { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    @media (min-width: 820px) {
+      body { flex-direction: row; }
+      #ps-stage { flex: 1; height: auto; border-bottom: 0; border-right: 1px solid var(--ps-line); }
+      #ps-side { width: 340px; flex: none; display: flex; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <div id="ps-stage">
+    <canvas id="ps-canvas"></canvas>
+    <svg id="ps-overlay" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"></svg>
+  </div>
+  <div id="ps-side">
+    <p id="ps-message" role="status"></p>
+    <div id="ps-panel">
+      <section id="ps-background-section"></section>
+      <section id="ps-robots-section"></section>
+      <section id="ps-placed-section"></section>
+      <section id="ps-play-section"></section>
+      <section id="ps-save-section"></section>
+      <section id="ps-account-section"></section>
+    </div>
+  </div>
+  <script type="module" src="pane/static/main.js"></script>
+</body>
+</html>

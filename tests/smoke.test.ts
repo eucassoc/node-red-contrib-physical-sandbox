@@ -110,12 +110,15 @@ test('the runtime plugin carries a hub object for the nodes', () => {
   assert.notEqual(plugin.hub, null);
 });
 
-test('the editor side of the plugin adds the sidebar tab with its placeholder text', async () => {
+test('the editor side of the plugin adds the sidebar tab: the pane in an iframe, and a button for a window of its own', async () => {
   const { status, body } = await get('/plugins', 'text/html');
   assert.equal(status, 200);
   assert.match(body, /RED\.plugins\.registerPlugin\(\s*['"]physical-sandbox['"]/);
   assert.match(body, /RED\.sidebar\.addTab\(/);
-  assert.match(body, /準備中です/);
+  assert.match(body, /<iframe/);
+  assert.match(body, /physical-sandbox\/pane/);
+  assert.match(body, /RED\.comms\.subscribe\('ps-pane\/#'/);
+  assert.match(body, /別ウィンドウで開く/);
 });
 
 test('GET /nodes lists the ps-in and ps-play node sets with their types, enabled', async () => {
