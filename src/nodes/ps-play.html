@@ -1,0 +1,24 @@
+<script type="text/javascript">
+  RED.nodes.registerType('ps play', {
+    category: 'physical sandbox',
+    color: '#c7e9c0',
+    defaults: { name: { value: '' } },
+    inputs: 1,
+    outputs: 1,
+    icon: 'font-awesome/fa-play',
+    paletteLabel: 'ps play',
+    label: function () { return this.name || 'ps play'; },
+  });
+</script>
+
+<script type="text/html" data-template-name="ps play">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name">
+  </div>
+</script>
+
+<script type="text/html" data-help-name="ps play">
+  <p>Plays a record out as <code>ps/&lt;site&gt;/&lt;id&gt;/state</code> messages, to the Physical Sandbox pane and to its output.</p>
+  <p>Not working yet.</p>
+</script>

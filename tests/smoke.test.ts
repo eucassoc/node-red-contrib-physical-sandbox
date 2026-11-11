@@ -1,0 +1,130 @@
+// Smoke test: a real Node-RED loads the built package (plugin and nodes) from a temp userDir.
+// PS_NODE_RED picks which Node-RED to run: 'node-red' (4.1.x, the floor) or 'node-red-5'.
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const require = createRequire(import.meta.url);
+const repoRoot = resolve(fileURLToPath(import.meta.url), '../..');
+const nodeRedName = process.env.PS_NODE_RED || 'node-red';
+const nodeRedRequire = createRequire(require.resolve(`${nodeRedName}/package.json`));
+
+let RED: any;
+let server: http.Server;
+let base: string;
+let userDir: string;
+
+// Install the package as npm would: package.json plus the files it lists, under <userDir>/node_modules.
+async function installBuiltPackage(dir: string): Promise<void> {
+  const pkg = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
+  const target = join(dir, 'node_modules', pkg.name);
+  await mkdir(target, { recursive: true });
+  await cp(join(repoRoot, 'package.json'), join(target, 'package.json'));
+  for (const entry of pkg.files as string[]) {
+    await cp(join(repoRoot, entry), join(target, entry), { recursive: true });
+  }
+  await writeFile(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: 'node-red-project', private: true, dependencies: { [pkg.name]: pkg.version } }, null, 2),
+  );
+}
+
+async function get(path: string, accept: string): Promise<{ status: number; body: string }> {
+  const res = await fetch(base + path, { headers: { Accept: accept } });
+  return { status: res.status, body: await res.text() };
+}
+
+before(async () => {
+  userDir = await mkdtemp(join(tmpdir(), 'ps-nr-smoke-'));
+  await installBuiltPackage(userDir);
+  RED = require(nodeRedName);
+  server = http.createServer();
+  RED.init(server, {
+    userDir,
+    httpAdminRoot: '/',
+    httpNodeRoot: false,
+    uiPort: 0,
+    flowFile: 'flows.json',
+    credentialSecret: false,
+    logging: { console: { level: 'off', metrics: false, audit: false } },
+    telemetry: { enabled: false },
+    editorTheme: { tours: false },
+  });
+  server.on('request', RED.httpAdmin);
+  await RED.start();
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+});
+
+after(async () => {
+  await RED?.stop();
+  await new Promise<void>((done) => (server ? server.close(() => done()) : done()));
+  if (userDir) await rm(userDir, { recursive: true, force: true });
+});
+
+test('the chosen Node-RED is the one running', async () => {
+  const expected = nodeRedRequire('./package.json').version;
+  const { status, body } = await get('/settings', 'application/json');
+  assert.equal(status, 200);
+  // Node-RED adds '-git' to its version when a .git folder sits just above its node_modules (this repo's).
+  assert.equal(JSON.parse(body).version.replace(/-git$/, ''), expected);
+});
+
+test('GET /plugins lists the physical-sandbox plugin, loaded without error', async () => {
+  const { status, body } = await get('/plugins', 'application/json');
+  assert.equal(status, 200);
+  const sets = JSON.parse(body) as any[];
+  const set = sets.find((s) => s.module === 'node-red-contrib-physical-sandbox');
+  assert.ok(set, `no plugin set from this package in ${body}`);
+  assert.equal(set.err, undefined);
+  assert.deepEqual(
+    set.plugins.map((p: any) => [p.id, p.type]),
+    [['physical-sandbox', 'physical-sandbox']],
+  );
+});
+
+test('the runtime plugin carries a hub object for the nodes', () => {
+  const registry = nodeRedRequire('@node-red/registry');
+  const plugin = registry.getPlugin('physical-sandbox');
+  assert.equal(plugin?.type, 'physical-sandbox');
+  assert.equal(typeof plugin?.hub, 'object');
+  assert.notEqual(plugin.hub, null);
+});
+
+test('the editor side of the plugin adds the sidebar tab with its placeholder text', async () => {
+  const { status, body } = await get('/plugins', 'text/html');
+  assert.equal(status, 200);
+  assert.match(body, /RED\.plugins\.registerPlugin\(\s*['"]physical-sandbox['"]/);
+  assert.match(body, /RED\.sidebar\.addTab\(/);
+  assert.match(body, /準備中です/);
+});
+
+test('GET /nodes lists the ps-in and ps-play node sets with their types, enabled', async () => {
+  const { status, body } = await get('/nodes', 'application/json');
+  assert.equal(status, 200);
+  const sets = (JSON.parse(body) as any[]).filter((s) => s.module === 'node-red-contrib-physical-sandbox');
+  const byName = Object.fromEntries(sets.map((s) => [s.name, s]));
+  for (const [name, type] of [['ps-in', 'ps in'], ['ps-play', 'ps play']]) {
+    const set = byName[name];
+    assert.ok(set, `no node set ${name} in ${body}`);
+    assert.equal(set.err, undefined, `${name}: ${JSON.stringify(set.err)}`);
+    assert.equal(set.enabled, true);
+    assert.deepEqual(set.types, [type]);
+  }
+});
+
+test('the editor gets the templates and help of both nodes', async () => {
+  const { status, body } = await get('/nodes', 'text/html');
+  assert.equal(status, 200);
+  for (const type of ['ps in', 'ps play']) {
+    assert.match(body, new RegExp(`RED\\.nodes\\.registerType\\(\\s*['"]${type}['"]`));
+    assert.match(body, new RegExp(`data-template-name="${type}"`));
+    assert.match(body, new RegExp(`data-help-name="${type}"`));
+  }
+});

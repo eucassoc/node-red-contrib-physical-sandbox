@@ -1,0 +1,17 @@
+<script type="text/javascript">
+  // Editor side of the Physical Sandbox plugin: the sidebar tab. The pane comes later.
+  RED.plugins.registerPlugin('physical-sandbox', {
+    type: 'physical-sandbox',
+    onadd: function () {
+      var content = $('<div class="ps-pane-placeholder" style="padding:12px"></div>').text('準備中です');
+      RED.sidebar.addTab({
+        id: 'physical-sandbox',
+        label: 'PS',
+        name: 'Physical Sandbox',
+        iconClass: 'fa fa-cube',
+        content: content,
+        enableOnEdit: true,
+      });
+    },
+  });
+</script>
