@@ -4,8 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listMachines, resolveBundle, serveBundleFile } from '../src/core/machines.js';
-import { forgetBundles } from '../src/pscom/catalog-client.js';
+import { fetchCatalogBundleFile, listMachines, meshUrlOf, resolveBundle, serveBundleFile } from '../src/core/machines.js';
 
 const tmp = (): string => mkdtempSync(join(tmpdir(), 'ps-machines-'));
 const BASE = 'https://ps.test';
@@ -101,7 +100,7 @@ test('a bare product name resolves to a local bundle before anything else', asyn
   const calls: Call[] = [];
   const r = await resolveBundle('so101', opts({ localDirs: [localDir], fetchImpl: fakeFetch(calls) }));
   assert.equal(r.bundleUrl, '/physical-sandbox/bundles/local/0/so101/bundle.json');
-  assert.equal(r.meshUrl('assets/base.bin'), '/physical-sandbox/bundles/local/0/so101/assets/base.bin');
+  assert.equal(meshUrlOf(r, 'assets/base.bin'), '/physical-sandbox/bundles/local/0/so101/assets/base.bin');
   assert.equal(calls.length, 0);
 });
 
@@ -121,11 +120,124 @@ test('handle/name:version uses the cache when it holds that version, else the ca
   makeBundle(join(cacheRoot, 'catalog', 'physical-sandbox', 'g1', '3'), 'g1');
   const cached = await resolveBundle('physical-sandbox/g1:3', opts({ cacheRoot }));
   assert.equal(cached.bundleUrl, '/physical-sandbox/bundles/cache/physical-sandbox/g1/3/bundle.json');
-  forgetBundles();
   const calls: Call[] = [];
   const remote = await resolveBundle('physical-sandbox/g1:4', opts({ cacheRoot, fetchImpl: fakeFetch(calls) }));
-  assert.equal(remote.bundleUrl, `${BASE}/api/catalog/physical-sandbox/g1/4/files/bundle.json`);
-  assert.equal(remote.meshUrl('assets/base.bin'), `${BASE}/api/catalog/physical-sandbox/g1/4/files/assets/base.bin`);
+  assert.deepEqual(remote, {
+    source: 'catalog', bundleUrl: '/physical-sandbox/bundles/catalog/physical-sandbox/g1/4/bundle.json',
+    meshBase: '/physical-sandbox/bundles/catalog/physical-sandbox/g1/4/',
+  });
+  assert.equal(meshUrlOf(remote, 'assets/base.bin'), '/physical-sandbox/bundles/catalog/physical-sandbox/g1/4/assets/base.bin');
+  assert.throws(() => meshUrlOf(remote, '../x'));
+  JSON.stringify(remote); // plain data, nothing to lose on the way to the browser
+});
+
+/** A catalog with one private robot (404 without the token) and one public one. */
+function catalogWithPrivate(calls: Call[] = []) {
+  const files: Record<string, string> = {
+    'alice/secret/1/bundle.json': bundleJson('secret'), 'alice/secret/1/assets/base.bin': 'private mesh',
+    'alice/secret/1/assets/base.png': 'png', 'alice/secret/1/assets/other.bin': 'not named',
+  };
+  return async (url: string, init?: any) => {
+    const auth = init?.headers?.Authorization;
+    calls.push({ url, auth });
+    const path = new URL(url).pathname.replace('/api/catalog/', '');
+    if (auth !== 'Bearer tok') return { ok: false, status: 404, json: async () => ({}) };
+    if (path === 'alice/secret/1/manifest') return { ok: true, status: 200, json: async () => ({ bundle: 'bundle.json' }) };
+    const m = /^(.*)\/files\/(.*)$/.exec(path);
+    const body = m ? files[`${m[1]}/${m[2]}`] : undefined;
+    if (body === undefined) return { ok: false, status: 404, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => JSON.parse(body), arrayBuffer: async () => new TextEncoder().encode(body).buffer };
+  };
+}
+
+test('a private catalog robot resolves and serves through Node-RED with the token, and not without', async () => {
+  const calls: Call[] = [];
+  const o = opts({ fetchImpl: catalogWithPrivate(calls), token: 'tok' });
+  const r = await resolveBundle('alice/secret:1', o);
+  assert.equal(r.source, 'catalog');
+  assert.equal(r.bundleUrl, '/physical-sandbox/bundles/catalog/alice/secret/1/bundle.json');
+  const file = { catalogBase: BASE, fetchImpl: o.fetchImpl, token: 'tok' };
+  const bundle = await fetchCatalogBundleFile('alice/secret/1', 'bundle.json', file);
+  assert.equal(bundle!.contentType, 'application/json');
+  assert.equal(JSON.parse(bundle!.bytes.toString()).id, 'secret');
+  const mesh = await fetchCatalogBundleFile('alice/secret/1', 'assets/base.bin', file);
+  assert.equal(mesh!.bytes.toString(), 'private mesh');
+  assert.equal(mesh!.contentType, 'application/octet-stream');
+  assert.equal((await fetchCatalogBundleFile('alice/secret/1', 'assets/base.png', file))!.contentType, 'image/png');
+  assert.ok(calls.every((c) => c.auth === 'Bearer tok'));
+  // without the token the catalog says 404
+  await assert.rejects(resolveBundle('alice/secret:1', opts({ fetchImpl: catalogWithPrivate() })));
+  assert.equal(await fetchCatalogBundleFile('alice/secret/1', 'bundle.json', { ...file, token: undefined }), null);
+});
+
+test('fetchCatalogBundleFile applies the same allowlist and path checks', async () => {
+  const file = { catalogBase: BASE, fetchImpl: catalogWithPrivate(), token: 'tok' };
+  for (const p of ['assets/other.bin', 'manifest.json', 'assets/../bundle.json', '../x', '/etc/passwd', 'assets\\base.bin', 'assets//base.bin', 'assets/base.bin\0', '']) {
+    assert.equal(await fetchCatalogBundleFile('alice/secret/1', p, file), null, JSON.stringify(p));
+  }
+  assert.equal(await fetchCatalogBundleFile('alice/secret/../1', 'bundle.json', file), null);
+  assert.equal(await fetchCatalogBundleFile('alice/secret', 'bundle.json', file), null);
+});
+
+test('the same bare name in a local folder and in the cache: local wins', async () => {
+  const localDir = tmp(); const cacheRoot = tmp();
+  makeBundle(join(localDir, 'so101'), 'so101');
+  makeBundle(join(cacheRoot, 'catalog', 'physical-sandbox', 'so101', '2'), 'so101');
+  writeFileSync(join(cacheRoot, 'catalog', 'physical-sandbox', 'so101', 'latest'), '2');
+  const r = await resolveBundle('so101', opts({ cacheRoot, localDirs: [localDir] }));
+  assert.equal(r.source, 'local');
+});
+
+test('names starting with a dot (psbx partial downloads) are not listed', async () => {
+  const localDir = tmp(); const cacheRoot = tmp();
+  makeBundle(join(localDir, '.hidden'), 'hidden');
+  makeBundle(join(cacheRoot, 'catalog', 'physical-sandbox', 'g1', '.4.partial-123'), 'g1');
+  makeBundle(join(cacheRoot, 'catalog', 'physical-sandbox', 'g1', '3'), 'g1');
+  const { machines } = await listMachines(opts({ cacheRoot, localDirs: [localDir] }));
+  assert.deepEqual(machines.filter((m) => m.source !== 'catalog').map((m) => m.ref), ['physical-sandbox/g1:3']);
+});
+
+test('a stalled catalog does not hold up the other rows beyond the timeout', async () => {
+  const localDir = tmp();
+  makeBundle(join(localDir, 'myarm'), 'myarm');
+  const stalled = (_url: string, init?: any) => new Promise<any>((_, reject) => {
+    const keepAlive = setTimeout(() => {}, 5000); // AbortSignal.timeout's own timer does not hold the loop
+    init?.signal?.addEventListener('abort', () => { clearTimeout(keepAlive); reject(new Error('aborted')); });
+  });
+  const started = Date.now();
+  const { machines, offline } = await listMachines(opts({ localDirs: [localDir], fetchImpl: stalled, timeoutMs: 50 }));
+  assert.ok(Date.now() - started < 2000);
+  assert.equal(offline, true);
+  assert.deepEqual(machines.map((m) => m.ref), ['myarm']);
+});
+
+test('the catalog queries run in parallel', async () => {
+  let open = 0; let peak = 0;
+  const slow = async (url: string, init?: any) => {
+    open++; peak = Math.max(peak, open);
+    await new Promise((r) => setTimeout(r, 20));
+    open--;
+    return fakeFetch()(url, init);
+  };
+  await listMachines(opts({ fetchImpl: slow, token: 'tok' }));
+  assert.equal(peak, 4);
+});
+
+test('serveBundleFile against the cache source refuses absolute paths and symlinks out', () => {
+  const outer = tmp();
+  const cacheRoot = join(outer, 'cache');
+  makeBundle(join(cacheRoot, 'catalog', 'h1', 'n1', '1'), 'n1');
+  writeFileSync(join(outer, 'outside.bin'), 'secret');
+  const v1 = join(cacheRoot, 'catalog', 'h1', 'n1', '1');
+  symlinkSync(join(outer, 'outside.bin'), join(v1, 'assets', 'linked.bin'));
+  writeFileSync(join(v1, 'bundle.json'), bundleJson('n1', { links: { base: { visuals: [{ mesh: 'assets/linked.bin' }, { mesh: 'assets/base.bin' }] } } }));
+  mkdirSync(join(outer, 'stray'));
+  makeBundle(join(outer, 'stray'), 'stray');
+  symlinkSync(join(outer, 'stray'), join(cacheRoot, 'catalog', 'h1', 'n1', '2'));
+  const roots = { cacheRoot, localDirs: [] as string[] };
+  assert.ok(serveBundleFile('cache', 'h1/n1/1/assets/base.bin', roots));
+  for (const p of ['/etc/passwd', '/h1/n1/1/bundle.json', join(outer, 'outside.bin'), 'h1/n1/1/assets/linked.bin', 'h1/n1/2/bundle.json', 'h1/n1/../../../outside.bin'])
+    assert.equal(serveBundleFile('cache', p, roots), null, p);
 });
 
 test('serveBundleFile serves bundle.json and the assets it names, local and cache', () => {
