@@ -23,6 +23,7 @@ await build({
     'plugin/index': 'src/plugin/index.ts',
     'nodes/ps-in': 'src/nodes/ps-in.ts',
     'nodes/ps-play': 'src/nodes/ps-play.ts',
+    'bin/ps-nodered-mcp': 'src/bin/ps-nodered-mcp.ts',
   },
   outdir: 'dist',
   bundle: true,

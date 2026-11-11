@@ -103,6 +103,21 @@ again). It survives a restart of Node-RED. If the record you saved over was chan
 copy is saved as a new record and the pane says so. A copy that can never go (it uses a robot only this
 computer has, or belongs to another account) can be taken away with 「取り除く」 on its line.
 
+## Claude Desktop
+
+`ps-nodered-mcp` lets Claude Desktop use the agent tools of the Node-RED running on this computer. Add this to Claude Desktop's configuration (`claude_desktop_config.json`) and restart it:
+
+```json
+{"mcpServers": {"node-red-physical-sandbox": {"command": "npx", "args": ["-y", "-p", "node-red-contrib-physical-sandbox", "ps-nodered-mcp"]}}}
+```
+
+Options (add them to `args` after `ps-nodered-mcp`):
+
+- `--url <address>`: the MCP route of Node-RED. Default `http://127.0.0.1:1880/physical-sandbox/mcp`; also `PS_NODERED_URL`.
+- `--user-dir <folder>`: Node-RED's user folder, where the key is read from `physical-sandbox/mcp-key`. Default `~/.node-red`; also `NODE_RED_USER_DIR`.
+
+The route answers only this computer, and only with that key, which the plugin creates when Node-RED starts.
+
 ## Privacy and limits
 
 - The background photo or video never leaves this computer. Only the record (states and the scene's devices)

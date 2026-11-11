@@ -74,6 +74,21 @@ physicalSandbox: {
 
 PS.com に接続できない（オフライン・ログインしていない・PS.com の障害）などで保存できなかったときは、記録を `<userDir>/physical-sandbox/unsent/` に残し、ペインに「PS.com 未保存」と「再送信する」ボタンを表示します。Node-RED を再起動しても残ります。上書き保存の対象が別の場所で変更されていたときは、その記録は新しい記録として保存され、ペインにその旨が表示されます。送ることのできない記録（このパソコンにしかないロボットを使った記録・別のアカウントの記録）は、その行の「取り除く」で取り除けます。
 
+## Claude Desktop
+
+`ps-nodered-mcp` を使うと、Claude Desktop からこのパソコンの Node-RED のエージェント用ツールを使えます。Claude Desktop の設定ファイル（`claude_desktop_config.json`）に次を追加して、再起動してください。
+
+```json
+{"mcpServers": {"node-red-physical-sandbox": {"command": "npx", "args": ["-y", "-p", "node-red-contrib-physical-sandbox", "ps-nodered-mcp"]}}}
+```
+
+オプション（`args` の `ps-nodered-mcp` の後ろに追加します）:
+
+- `--url <アドレス>`: Node-RED の MCP の窓口。既定は `http://127.0.0.1:1880/physical-sandbox/mcp`。環境変数 `PS_NODERED_URL` でも指定できます。
+- `--user-dir <フォルダ>`: Node-RED のユーザーフォルダ。`physical-sandbox/mcp-key` からキーを読み込みます。既定は `~/.node-red`。環境変数 `NODE_RED_USER_DIR` でも指定できます。
+
+窓口はこのパソコンからの接続だけを、そのキーがある場合に限って受け付けます。キーは Node-RED の起動時にプラグインが作成します。
+
 ## プライバシーと制限
 
 - 背景の写真や動画は、このパソコンの外に出ません。PS.com に送られるのは記録（動きと現地のロボット）だけで、保存を押したときに限ります。
