@@ -88,7 +88,8 @@ export interface Hub {
    */
   setSite(site?: string): Scene;
   /**
-   * One message into the stream; false (and nothing else happens) when it is not one or is older.
+   * One message into the stream; false (and nothing else happens) when it is not one, is older, or
+   * is for another site than the scene's.
    * A `retained` one (the broker's last message, given again on subscribing) moves the panes and
    * the latest states but is not kept in the buffer: it is not something that happened now, and
    * it must not take the place of an opened record's trace.
