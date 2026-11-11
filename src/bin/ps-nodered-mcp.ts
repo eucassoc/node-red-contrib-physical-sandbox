@@ -14,10 +14,11 @@ import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontex
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { version } from '../../package.json';
 
 const DEFAULT_URL = 'http://127.0.0.1:1880/physical-sandbox/mcp';
 const CALL_TIMEOUT_MS = 300_000;
-// While Node-RED cannot be reached the bridge looks again at this interval (PS_BRIDGE_POLL_MS is for tests).
+// While Node-RED cannot be reached the bridge looks again at this interval (PS_BRIDGE_POLL_MS, in ms; see the README).
 const POLL_MS = Number(process.env.PS_BRIDGE_POLL_MS) || 5000;
 
 function option(argv: string[], name: string): string | undefined {
@@ -45,21 +46,32 @@ async function readKey(): Promise<string> {
   );
 }
 
-const NETWORK_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EHOSTUNREACH']);
+const NETWORK_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EHOSTUNREACH', 'ETIMEDOUT']);
 
-/** True only when nothing answered: fetch's TypeError, or a cause (however deep) with a connection error code. */
+/** The errors from `error` down its causes (fetch's TypeError carries the socket's error as its cause). */
+function chainOf(error: unknown): any[] {
+  const chain: any[] = [];
+  for (let e: any = error; e && chain.length < 5; e = e.cause) chain.push(e);
+  return chain;
+}
+
+/** True only when nothing answered there: a cause (however deep) with a connection error code. */
 function isNetworkError(error: unknown): boolean {
-  if (error instanceof TypeError) return true;
-  for (let e: any = error, depth = 0; e && depth < 5; e = e.cause, depth++) {
-    if (NETWORK_CODES.has(e.code)) return true;
-  }
-  return false;
+  return chainOf(error).some((e) => NETWORK_CODES.has(e?.code));
+}
+
+/** What went wrong, from the deepest cause: its code and message (never the request's headers). */
+function causeOf(error: unknown): string {
+  const deepest = chainOf(error).at(-1);
+  const code = typeof deepest?.code === 'string' ? deepest.code : '';
+  const message = (typeof deepest?.message === 'string' ? deepest.message : String(deepest)).replace(/\s+/g, ' ').trim();
+  return (code && !message.includes(code) ? `${code}: ${message}` : message).slice(0, 300);
 }
 
 /** Runs `use` on a fresh client connected to Node-RED; failures become Unavailable with a message for the person. */
 async function withNodeRed<T>(use: (client: Client) => Promise<T>): Promise<T> {
   const key = await readKey();
-  const client = new Client({ name: 'ps-nodered-mcp', version: '0.0.0' });
+  const client = new Client({ name: 'ps-nodered-mcp', version });
   // No Origin header is set: the route refuses requests that carry one.
   const transport = new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { Authorization: `Bearer ${key}` } } });
   try {
@@ -69,7 +81,7 @@ async function withNodeRed<T>(use: (client: Client) => Promise<T>): Promise<T> {
     if (error instanceof Unavailable || error instanceof McpError) throw error;
     if (error instanceof StreamableHTTPError && (error.code === 401 || error.code === 403)) {
       throw new Unavailable(
-        'Node-RED に断られました。mcp-key が Node-RED のものと合っていません。--user-dir を確かめてください\n' +
+        'Node-RED に接続を拒否されました。mcp-key が Node-RED のものと合っていません。--user-dir を確かめてください\n' +
           `Node-RED refused the key (HTTP ${error.code}). Check that --user-dir points at the user folder of the Node-RED at ${url}.`,
       );
     }
@@ -80,9 +92,10 @@ async function withNodeRed<T>(use: (client: Client) => Promise<T>): Promise<T> {
       );
     }
     if (isNetworkError(error)) throw new Unavailable(`Node-RED が起動していません（${url}）\nNode-RED is not running at ${url}.`);
-    process.stderr.write(`ps-nodered-mcp: ${(error as Error)?.message ?? String(error)}\n`);
+    const cause = causeOf(error);
+    process.stderr.write(`ps-nodered-mcp: ${(error as Error)?.message ?? String(error)} (${cause})\n`);
     throw new Unavailable(
-      `Node-RED への接続で問題が起きました。詳しくは Claude Desktop のログをご覧ください\nSomething went wrong talking to Node-RED at ${url}; see the bridge's log in Claude Desktop.`,
+      `Node-RED への接続で問題が起きました（${cause}）\nSomething went wrong talking to Node-RED at ${url}: ${cause}`,
     );
   } finally {
     await client.close().catch(() => undefined);
@@ -97,7 +110,7 @@ const STUB_TOOLS = [{
   inputSchema: { type: 'object' as const, properties: {} },
 }];
 
-const server = new Server({ name: 'physical-sandbox-nodered', version: '0.0.0' }, { capabilities: { tools: { listChanged: true } } });
+const server = new Server({ name: 'physical-sandbox-nodered', version }, { capabilities: { tools: { listChanged: true } } });
 
 let lastGood: { tools: unknown[] } | undefined;
 let lastReturned: string | undefined;

@@ -109,6 +109,21 @@ test('a wrong key is reported, not retried', async () => {
   } finally { await b.close(); await rm(wrong, { recursive: true, force: true }); }
 });
 
+test('the bridge gives the package\'s version; a failure that is not a refused connection reports its cause, not "not running"', async () => {
+  const { version } = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
+  // https to Node-RED's plain http: the TLS handshake fails, with Node-RED running
+  const b = await viaBridge(['--url', url.replace('http:', 'https:'), '--user-dir', userDir]);
+  try {
+    assert.equal(b.client.getServerVersion()?.version, version);
+    const r: any = await b.client.callTool({ name: 'ps_status', arguments: {} });
+    assert.equal(r.isError, true);
+    assert.doesNotMatch(text(r), /not running|起動していません/);
+    assert.match(text(r), /Node-RED への接続で問題が起きました（.+）/);
+    assert.match(text(r), /Something went wrong talking to Node-RED at https:.+: .+/);
+    assert.ok(!text(r).includes(key) && !b.err().includes(key), 'the key is never printed');
+  } finally { await b.close(); }
+});
+
 test('with Node-RED stopped, a call answers the Japanese line and the English one, and the bridge keeps running', async () => {
   const b = await viaBridge(['--url', url, '--user-dir', userDir]);
   try {
