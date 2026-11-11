@@ -10,6 +10,8 @@
  *   opened) and the live (`mqtt`) and `agent` states on their own `at`; a live state for a device
  *   takes the place of that device's loaded states. What a play sends (`record`) is never kept: the
  *   record is in the buffer already, so half a play, a faster one or a loop leave it as it was.
+ *   Nor is its echo: a live state with the topic and `at` of a state `ps play` played in the last
+ *   30 s (`ps play` → `mqtt out` → broker → `mqtt in` → `ps in`) moves the panes but is not kept.
  * - The latest state of every device, so that a pane opened late shows what the others show.
  *
  * Panes hear the hub through `RED.comms`: `ps-pane/scene` (retained, the whole scene),
@@ -25,6 +27,7 @@ import { recordToMessages, type Device, type Message, type Scene } from '../core
 import { PsComClient, tokenFileIn, type LoginStatus } from '../core/pscom-client.js';
 import { pending, sendAll, unsentDirIn, type SendAllResult, type Sender } from '../core/unsent.js';
 import { isLocalMachine } from '../core/machines.js';
+import { createPlayer, realClock, type Clock, type Player } from '../core/player.js';
 import type { PluginSettings } from './settings.js';
 
 type Json = Record<string, any>;
@@ -32,12 +35,7 @@ type FetchLike = (url: string, init?: any) => Promise<any>;
 
 export type From = 'mqtt' | 'record' | 'agent';
 
-/** The clock the hub plays records by (tests give a fake one). */
-export interface Clock {
-  now(): number;
-  setTimeout(fn: () => void, ms: number): unknown;
-  clearTimeout(handle: unknown): void;
-}
+export { realClock, type Clock };
 
 /** The record the pane opened: from PS.com (`ref` is `handle/name`) or from a file. */
 export type Opened =
@@ -118,6 +116,9 @@ export const STATUS_TOPIC = 'ps-pane/status';
 export const SNAPSHOT_MS = 100;
 /** A stream keeps at most this many state messages (about an hour of ten devices at 5/s); later ones still reach the panes. */
 export const STREAM_MAX = 200_000;
+/** A played state's echo is known by its topic and `at` for this long, and for at most this many states. */
+export const ECHO_MS = 30_000;
+export const ECHO_MAX = 50_000;
 
 /** A save asked for while another is under way. */
 export class Busy extends Error {
@@ -129,19 +130,8 @@ const isPoint = (c: unknown): boolean => isObject(c) && ['x', 'y', 'z'].every((k
 const nameTable = (v: unknown): Record<string, string> =>
   isObject(v) ? Object.fromEntries(Object.entries(v).filter(([k, id]) => isTopicName(k) && typeof id === 'string')) : {};
 const plain = <T>(v: T): T => JSON.parse(JSON.stringify(v));
-const round3 = (v: number) => Math.round(v * 1000) / 1000;
 /** A name of a file right in its folder: no path separator, no `..`, no NUL. */
 const isFileName = (v: unknown): v is string => typeof v === 'string' && v !== '' && !/[\\/\0]/.test(v) && !v.includes('..');
-
-export const realClock: Clock = {
-  now: () => Date.now(),
-  setTimeout: (fn, ms) => {
-    const handle = setTimeout(fn, ms);
-    handle.unref?.(); // a record being played never keeps Node-RED from stopping
-    return handle;
-  },
-  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-};
 
 /** A scene from anything (scene.json, a patch): what is not right is left out or set to its empty value. */
 export function normalizeScene(raw: unknown, site: string): Scene {
@@ -293,18 +283,51 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     tickTimer = clock.setTimeout(() => { tickTimer = null; tick(); }, wait);
   }
 
+  /** A message from outside (`ps in`, `ps play`, the agent). */
   function push(raw: unknown, from: From, opts: { retained?: boolean } = {}): boolean {
+    return accept(raw, from, opts, true);
+  }
+
+  /**
+   * One message into the stream. `fromOutside`: a played state is noted for its echo only when it
+   * came from outside (`ps play`, whose output may go to a broker); the pane's own playback never
+   * leaves the hub.
+   */
+  function accept(raw: unknown, from: From, opts: { retained?: boolean }, fromOutside: boolean): boolean {
     const message = validMessage(raw);
     if (!message) return false;
     const topic = parseTopic(message.topic)!;
     if (topic.kind === 'state') {
+      if (from === 'record' && fromOutside) notePlayed(message);
+      const echo = from === 'mqtt' && isEcho(message);
       const type = isItemTopic(topic.id, message.payload) ? 'item' : 'mover';
       if (!applyState(store, { id: message.topic, type }, message.payload)) return false;
-      if (from !== 'record' && opts.retained !== true) keep(message);
+      if (from !== 'record' && opts.retained !== true && !echo) keep(message);
     }
     publish(STATE_TOPIC, { ...message, from }, false);
     if (topic.kind === 'state') scheduleTick();
     return true;
+  }
+
+  /** The states played lately (`topic` and `at`) and until when an echo of each is known, oldest first. */
+  const played = new Map<string, number>();
+  const playedKey = (m: Message) => `${m.topic}\n${m.at}`;
+
+  function notePlayed(m: Message): void {
+    const now = clock.now();
+    for (const [key, until] of played) {
+      if (until > now) break;
+      played.delete(key);
+    }
+    const key = playedKey(m);
+    played.delete(key);
+    played.set(key, now + ECHO_MS);
+    if (played.size > ECHO_MAX) played.delete(played.keys().next().value!);
+  }
+
+  function isEcho(m: Message): boolean {
+    const until = played.get(playedKey(m));
+    return until !== undefined && until > clock.now();
   }
 
   /** A live or agent state into the buffer: the first one of a device drops that device's loaded states. */
@@ -332,54 +355,33 @@ export function createHub(RED: any, opts: HubOptions): Hub {
 
   // ---- playing a record ----
 
-  interface Run { messages: Message[]; next: number; start: number; speed: number; loop: boolean; source: string; duration: number; timer: unknown }
-  let run: Run | null = null;
+  let run: { player: Player; source: string } | null = null;
 
   function play(record: unknown, o: { loop?: boolean; speed?: number; source?: string } = {}): { count: number; duration: number } {
     stopRun();
     const { messages } = recordToMessages(isObject(record) ? record : {}, { site: scene.site });
-    const speed = Number.isFinite(o.speed) && (o.speed as number) > 0 ? Math.min(10, Math.max(0.1, o.speed as number)) : 1;
-    const duration = messages.length ? round3(messages[messages.length - 1].at / 1000) : 0;
-    if (messages.length) {
-      run = { messages, next: 0, start: clock.now(), speed, loop: o.loop === true, source: o.source ?? 'record', duration, timer: null };
-      publishStatus();
-      step();
-    } else {
-      publishStatus();
-    }
-    return { count: messages.length, duration };
-  }
-
-  /** Send every message that is due, then wait for the next one (or start again, or end). */
-  function step(): void {
-    const r = run;
-    if (!r) return;
-    r.timer = null;
-    const due = (clock.now() - r.start) * r.speed;
-    while (r.next < r.messages.length && r.messages[r.next].at <= due) {
-      const m = r.messages[r.next++];
-      push({ topic: m.topic, payload: { ...m.payload, at: r.start + Math.round(m.at / r.speed) } }, 'record');
-    }
-    if (r.next >= r.messages.length) {
-      if (!r.loop) {
+    const player = createPlayer({
+      messages,
+      clock,
+      speed: o.speed,
+      loop: o.loop === true,
+      onMessage: (m) => { accept(m, 'record', {}, false); },
+      onRound: publishStatus,
+      onEnd: () => {
+        if (run?.player !== player) return;
         run = null;
         publishStatus();
-        return;
-      }
-      r.next = 0;
-      r.start = clock.now();
-      publishStatus();
-      // a record whose every sample is at t = 0 waits a frame before it goes round again
-      r.timer = clock.setTimeout(step, r.messages[r.messages.length - 1].at > 0 ? 0 : SNAPSHOT_MS);
-      return;
-    }
-    const wait = Math.max(0, r.start + r.messages[r.next].at / r.speed - clock.now());
-    r.timer = clock.setTimeout(step, Math.ceil(wait));
+      },
+    });
+    if (messages.length) run = { player, source: o.source ?? 'record' };
+    publishStatus();
+    player.start();
+    return { count: player.count, duration: player.duration };
   }
 
   function stopRun(): boolean {
     if (!run) return false;
-    if (run.timer !== null) clock.clearTimeout(run.timer);
+    run.player.stop();
     run = null;
     return true;
   }
@@ -429,7 +431,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     return {
       login: loginHeld,
       unsent: unsentHeld,
-      playing: run ? { source: run.source, t: round3(((clock.now() - run.start) * run.speed) / 1000), duration: run.duration } : null,
+      playing: run ? { source: run.source, t: run.player.t(), duration: run.player.duration } : null,
       agentFrames,
       recorded: recordedCount(),
       opened: !opened ? null : 'ref' in opened ? { ref: opened.ref, version: opened.version, own: opened.own } : { file: opened.file },

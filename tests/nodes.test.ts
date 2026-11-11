@@ -141,15 +141,28 @@ test('ps in with a site takes that site\'s messages only', async () => {
   assert.deepEqual(out.map((m) => m.topic), ['ps/farm/arm/state']);
 });
 
-test('ps in without the plugin says so with a red status and passes nothing on', async () => {
+test('ps in without the plugin says so with a red status, and still passes the message on', async () => {
   await helper.load(withHub(null), inFlow());
   const out = collect('out');
   const node = helper.getNode('in');
   const seen = statuses(node);
   node.receive({ topic: 'ps/local/arm/state', payload: { at: 1, joints: { j: 1 } } });
   await settle();
-  assert.deepEqual(out, []);
+  assert.deepEqual(out.map((m) => m.topic), ['ps/local/arm/state']);
   assert.deepEqual(seen.at(-1), { fill: 'red', shape: 'ring', text: 'プラグインが読み込まれていません' });
+});
+
+test('ps in with a site that is not a site name says so in red and takes nothing', async () => {
+  const hub = stubHub();
+  await helper.load(withHub(hub), inFlow({ site: 'a/b' }));
+  const out = collect('out');
+  const node = helper.getNode('in');
+  const seen = statuses(node);
+  node.receive({ topic: 'ps/local/arm/state', payload: { at: 1, joints: { j: 1 } } });
+  await settle();
+  assert.deepEqual(hub.pushed, []);
+  assert.deepEqual(out, []);
+  assert.deepEqual(seen.at(-1), { fill: 'red', shape: 'ring', text: 'サイト名が正しくありません (bad site name)' });
 });
 
 // ---- ps play ----
@@ -367,4 +380,92 @@ test('ps play with PS.com out of reach says so in red', async () => {
   node.receive({ payload: 'start' });
   for (let i = 0; i < 100 && !seen.some((s) => s.fill === 'red'); i += 1) await new Promise((done) => setTimeout(done, 10));
   assert.equal(seen.find((s) => s.fill === 'red')?.text, 'PS.com に接続できませんでした');
+});
+
+test('ps play plays at the speed of its settings, kept between 0.1 and 10', async () => {
+  for (const [speed, steps] of [
+    [2, [[249, 1], [1, 3], [250, 4]]],
+    ['50', [[99, 3], [1, 4]]],          // 10 times
+    [0.01, [[4999, 1], [1, 3]]],        // a tenth
+  ] as const) {
+    const clock = fakeClock(START);
+    const hub = stubHub({ clock });
+    await helper.load(withHub(hub), playFlow({ speed }));
+    const out = collect('out');
+    helper.getNode('play').receive({ payload: 'start' });
+    await settle();
+    for (const [ms, count] of steps) {
+      clock.advance(ms);
+      await settle();
+      assert.equal(out.length, count, `speed ${speed}, at ${clock.now() - START} ms`);
+    }
+    await helper.unload();
+  }
+});
+
+test('ps play stops playing when it is closed (a deploy or a removal)', async () => {
+  const clock = fakeClock(START);
+  const hub = stubHub({ clock });
+  await helper.load(withHub(hub), playFlow({ loop: true }));
+  const out = collect('out');
+  const node = helper.getNode('play');
+  node.receive({ payload: 'start' });
+  await settle();
+  assert.equal(out.length, 1);
+  await node.close();
+  assert.equal(clock.pending(), 0, 'no timer left');
+  clock.advance(5000);
+  await settle();
+  assert.equal(out.length, 1);
+  assert.equal(hub.pushed.length, 1);
+});
+
+test('ps play with a record that has no motion says so in yellow', async () => {
+  const hub = stubHub();
+  await helper.load(withHub(hub), playFlow({ record: JSON.stringify({ ...record, traces: [] }) }));
+  const out = collect('out');
+  const node = helper.getNode('play');
+  const seen = statuses(node);
+  node.receive({ payload: 'start' });
+  await settle();
+  assert.deepEqual(out, []);
+  assert.deepEqual(seen.at(-1), { fill: 'yellow', shape: 'ring', text: '記録に再生できる動きがありません' });
+});
+
+test('ps play with a ref that is not handle/name[:version] says so in red without asking PS.com', async () => {
+  for (const ref of ['walk', 'ada/Walk', 'ada/walk:1:2', 'ada/w']) {
+    let asked = 0;
+    const hub = stubHub({ client: { openRecord: async () => { asked += 1; return { record }; }, status: () => ({ signedIn: false, handle: null }) } });
+    await helper.load(withHub(hub), playFlow({ source: 'record', ref }));
+    const node = helper.getNode('play');
+    const seen = statuses(node);
+    const errors: unknown[] = [];
+    node.on('call:error', (call: any) => errors.push(call.args[0]));
+    node.receive({ payload: 'start' });
+    await settle();
+    assert.equal(asked, 0, ref);
+    assert.deepEqual(seen.at(-1), { fill: 'red', shape: 'ring', text: '記録の名前は handle/name か handle/name:バージョン で指定してください' }, ref);
+    assert.equal(errors.length, 1);
+    await helper.unload();
+  }
+});
+
+test('ps play shows other failures as they are: a TypeError from the client, a throw while starting', async () => {
+  const cases: [string, () => unknown, () => unknown][] = [
+    ['boom', async () => { throw new TypeError('boom'); }, () => ({ site: 'local' })],
+    ['no scene', async () => ({ record }), () => { throw new Error('no scene'); }],
+  ];
+  for (const [text, openRecord, scene] of cases) {
+    const hub = { ...stubHub({ client: { openRecord, status: () => ({ signedIn: true, handle: 'ada' }) } }), scene };
+    await helper.load(withHub(hub), playFlow({ source: 'record', ref: 'ada/walk' }));
+    const node = helper.getNode('play');
+    const seen = statuses(node);
+    const errors: any[] = [];
+    node.on('call:error', (call: any) => errors.push(call.args[0]));
+    node.receive({ payload: 'start' });
+    for (let i = 0; i < 50 && !errors.length; i += 1) await new Promise((done) => setTimeout(done, 5));
+    assert.deepEqual(seen.at(-1), { fill: 'red', shape: 'ring', text }, text);
+    assert.equal(errors.length, 1, text);
+    await helper.unload();
+  }
 });

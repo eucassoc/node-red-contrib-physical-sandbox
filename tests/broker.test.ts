@@ -1,5 +1,6 @@
 // A round trip through a real broker: `ps play` → `mqtt out` → aedes → `mqtt in` → `ps in` → the
-// hub, with Node-RED's own MQTT nodes, for each Output setting of `mqtt in` (an object, text, a Buffer).
+// hub, with Node-RED's own MQTT nodes, for each Output setting of `mqtt in` (an object, text, a Buffer);
+// and with a real hub, a played record coming back through the broker is not kept as live.
 import { test, after, afterEach, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -8,7 +9,14 @@ import type { AddressInfo } from 'node:net';
 import { Aedes } from 'aedes';
 import psInNode from '../src/nodes/ps-in.js';
 import psPlayNode from '../src/nodes/ps-play.js';
-import { realClock, validMessage } from '../src/plugin/hub.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createHub, realClock, validMessage } from '../src/plugin/hub.js';
+import { registerRoutes } from '../src/plugin/routes.js';
+import { readSettings } from '../src/plugin/settings.js';
+import { fakeRed } from './helpers/fake-red.js';
+import { FakePsCom } from './helpers/fake-pscom.js';
 
 const require = createRequire(import.meta.url);
 const helper = require('node-red-node-test-helper');
@@ -33,6 +41,22 @@ after(async () => {
   await new Promise<void>((done) => server.close(() => done()));
 });
 
+/** The nodes (with `hub` as the plugin's) and the flow: ps play → mqtt out → broker → mqtt in → ps in → helper. */
+function roundTrip(hub: unknown, datatype: string, play: Record<string, unknown> = { source: 'inline', record: JSON.stringify(record), ref: '' }) {
+  const nodes = [mqttNode, psInNode, psPlayNode].map((fn) => (red: any) => {
+    red.plugins.get = (id: string) => (id === 'physical-sandbox' ? { type: 'physical-sandbox', hub } : undefined);
+    return fn(red);
+  });
+  return [nodes, [
+    { id: 'b', type: 'mqtt-broker', broker: '127.0.0.1', port: String(port), clientid: '', autoConnect: true, usetls: false, protocolVersion: '4', keepalive: '60', cleansession: true },
+    { id: 'play', type: 'ps play', loop: false, speed: 1, wires: [['out']], ...play },
+    { id: 'out', type: 'mqtt out', broker: 'b', topic: '', qos: '0', retain: '', wires: [] },
+    { id: 'in', type: 'mqtt in', broker: 'b', topic: 'ps/#', qos: '0', datatype, inputs: 0, wires: [['psin']] },
+    { id: 'psin', type: 'ps in', site: '', wires: [['seen']] },
+    { id: 'seen', type: 'helper' },
+  ]] as const;
+}
+
 const record = {
   schemaVersion: 3,
   frame: { frameId: 'site', up: '+Y', unit: 'm' },
@@ -45,8 +69,9 @@ const record = {
   },
   names: { arm: 'arm', box: 'box' },
   traces: [
-    { deviceId: 'arm', samples: [{ t: 0, joints: { j: 0 } }, { t: 0.05, joints: { j: 0.5 } }, { t: 0.1, joints: { j: 1 }, position: [0.1, 0, 0], yaw: 0.2 }] },
-    { deviceId: 'box', samples: [{ t: 0.05, position: [1, 0, 0.2] }] },
+    // as a record is written (a trace starts at t = 0; position, yaw, joints), so saving its own stream over it changes nothing
+    { deviceId: 'arm', samples: [{ t: 0, joints: { j: 0 } }, { t: 0.05, joints: { j: 0.5 } }, { t: 0.1, position: [0.1, 0, 0], yaw: 0.2, joints: { j: 1 } }] },
+    { deviceId: 'box', samples: [{ t: 0, position: [1, 0, 0.2] }] },
   ],
   markers: [],
   routes: [],
@@ -63,25 +88,14 @@ for (const datatype of ['auto-detect', 'utf8', 'buffer']) {
         return true;
       },
     };
-    const nodes = [mqttNode, psInNode, psPlayNode].map((fn) => (red: any) => {
-      red.plugins.get = (id: string) => (id === 'physical-sandbox' ? { type: 'physical-sandbox', hub } : undefined);
-      return fn(red);
-    });
     const subscribed = new Promise<void>((done) => broker.once('subscribe', () => done()));
-    await helper.load(nodes, [
-      { id: 'b', type: 'mqtt-broker', broker: '127.0.0.1', port: String(port), clientid: '', autoConnect: true, usetls: false, protocolVersion: '4', keepalive: '60', cleansession: true },
-      { id: 'play', type: 'ps play', source: 'inline', record: JSON.stringify(record), ref: '', loop: false, speed: 1, wires: [['out']] },
-      { id: 'out', type: 'mqtt out', broker: 'b', topic: '', qos: '0', retain: '', wires: [] },
-      { id: 'in', type: 'mqtt in', broker: 'b', topic: 'ps/#', qos: '0', datatype, inputs: 0, wires: [['psin']] },
-      { id: 'psin', type: 'ps in', site: '', wires: [['seen']] },
-      { id: 'seen', type: 'helper' },
-    ]);
+    await helper.load(...roundTrip(hub, datatype));
     await subscribed;
     const seen: any[] = [];
     helper.getNode('seen').on('input', (msg: any) => seen.push(msg));
     helper.getNode('play').receive({ payload: 'start' });
 
-    for (let i = 0; i < 200 && pushed.filter((p) => p.from === 'mqtt').length < 4; i += 1) await new Promise((done) => setTimeout(done, 10));
+    for (let i = 0; i < 200 && (pushed.filter((p) => p.from === 'mqtt').length < 4 || seen.length < 4); i += 1) await new Promise((done) => setTimeout(done, 10));
     const played = pushed.filter((p) => p.from === 'record').map((p) => p.message);
     const heard = pushed.filter((p) => p.from === 'mqtt');
     assert.equal(played.length, 4);
@@ -92,3 +106,54 @@ for (const datatype of ['auto-detect', 'utf8', 'buffer']) {
     assert.ok(seen.every((m) => (kind === 'buffer' ? Buffer.isBuffer(m.payload) : typeof m.payload === kind)), `${kind} payloads`);
   });
 }
+
+test('a record played out through the broker and back into ps in (twice as fast) moves the pane but is not kept: saving over changes nothing', { timeout: 20_000 }, async () => {
+  const fake = await new FakePsCom().start();
+  fake.seed('ada', 'walk', '1', record);
+  const userDir = mkdtempSync(join(tmpdir(), 'ps-broker-'));
+  const settings = readSettings({ catalogBase: fake.base, localMachineDirs: [] }, { userDir, env: {} });
+  const red = fakeRed({ userDir });
+  const hub = createHub(red.RED, { userDir, settings, pollMs: 0 });
+  registerRoutes(red.RED, hub, { paneDir: mkdtempSync(join(tmpdir(), 'ps-broker-pane-')), cacheRoot: mkdtempSync(join(tmpdir(), 'ps-broker-cache-')) });
+  const base = await red.listen();
+  const call = async (path: string, body: unknown) => {
+    const res = await fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-PS-Pane': '1' }, body: JSON.stringify(body) });
+    return { status: res.status, json: await res.json() as any };
+  };
+  try {
+    await hub.client.loginStart();
+    await hub.client.loginPoll();
+    let r = await call('/physical-sandbox/stream/play', { ref: 'ada/walk' }); // the pane opens the record
+    assert.equal(r.status, 200);
+    hub.stop();
+    const recorded = hub.status().recorded;
+    assert.equal(recorded, 4);
+    const buffer = hub.streamBuffer();
+
+    const subscribed = new Promise<void>((done) => broker.once('subscribe', () => done()));
+    await helper.load(...roundTrip(hub, 'auto-detect', { source: 'record', record: '', ref: 'ada/walk', speed: 2 }));
+    await subscribed;
+    const seen: any[] = [];
+    helper.getNode('seen').on('input', (msg: any) => seen.push(msg));
+    const before = red.published.length;
+    helper.getNode('play').receive({ payload: 'start' });
+    for (let i = 0; i < 300 && seen.length < 4; i += 1) await new Promise((done) => setTimeout(done, 10));
+    assert.equal(seen.length, 4, 'every played state came back through the broker');
+    const states = red.published.slice(before).filter((p) => p.topic === 'ps-pane/state');
+    assert.equal(states.filter((p) => p.data.from === 'record').length, 4, 'played to the panes');
+    assert.equal(hub.status().recorded, recorded, 'the echoes are not kept');
+    assert.deepEqual(hub.streamBuffer(), buffer, 'the opened record\'s states, on its own time');
+
+    r = await call('/physical-sandbox/record/save', { mode: 'over' });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.deepEqual([r.json.saved, r.json.version, r.json.unchanged], [true, '1', true]);
+
+    // a live message of the same device at another time is kept, as before
+    assert.equal(hub.push({ topic: 'ps/local/arm/state', payload: { at: realClock.now() + 60_000, joints: { j: 9 } } }, 'mqtt'), true);
+    assert.equal(hub.status().recorded, recorded - 3 + 1, 'the arm\'s loaded trace gave way to the live state');
+  } finally {
+    hub.close();
+    await red.close();
+    await fake.stop();
+  }
+});

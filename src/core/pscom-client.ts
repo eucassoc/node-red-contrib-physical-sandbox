@@ -343,6 +343,12 @@ export class PsComClient {
 
 const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** Whether `ref` is a record `openRecord` can read: `handle/name[:version]` with a catalog name. */
+export function isRecordRef(ref: unknown): boolean {
+  const m = /^([^/:]+)\/([^/:]+)(?::([^/:]+))?$/.exec(String(ref));
+  return m !== null && NAME.test(m[2]);
+}
+
 /** `handle/name[:version]` or a bare `name`; the name must be a catalog name. */
 function splitRef(ref: string): { handle: string | null; name: string; version: string | null } {
   const m = /^(?:([^/:]+)\/)?([^/:]+)(?::([^/:]+))?$/.exec(String(ref));

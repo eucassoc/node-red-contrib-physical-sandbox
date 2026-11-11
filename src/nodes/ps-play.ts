@@ -13,9 +13,10 @@
  * `{command, speed?, loop?}`, whose speed and loop win over the node's settings.
  */
 import type { Node, NodeAPI, NodeDef } from 'node-red';
-import { SNAPSHOT_MS, realClock, type Clock, type Hub } from '../plugin/hub.js';
-import { recordToMessages, type Message } from '../core/stream.js';
-import { Offline, Refused, SignIn } from '../core/pscom-client.js';
+import type { Hub } from '../plugin/hub.js';
+import { recordToMessages } from '../core/stream.js';
+import { createPlayer, realClock, type Player } from '../core/player.js';
+import { isRecordRef, Offline, Refused, SignIn } from '../core/pscom-client.js';
 
 type Json = Record<string, any>;
 
@@ -63,12 +64,6 @@ function commandOf(payload: unknown): Command | null {
   return null;
 }
 
-/** As the hub plays: 1 unless given, between 0.1 and 10. */
-function speedOf(v: unknown): number {
-  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
-  return typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.min(10, Math.max(0.1, n)) : 1;
-}
-
 /** An error whose message is what the status shows. */
 class Shown extends Error {}
 
@@ -83,25 +78,14 @@ export default function psPlayNode(RED: NodeAPI): void {
 
     /** The PS.com record, once read (a `record` source). */
     let fetched: Json | null = null;
-    /** The messages of the last start, on the record's time (`at` from 0). */
-    let messages: Message[] = [];
-    let next = 0;
-    let start = 0;
-    let speed = 1;
-    let loop = false;
-    let timer: unknown = null;
-    let clock: Clock = realClock;
+    /** The playback of the last start. */
+    let player: Player | null = null;
     /** Every command makes the ones before it stale (a record still being read is then not played). */
     let generation = 0;
     let lastShown = -Infinity;
 
     const show = (fill: 'green' | 'grey' | 'blue' | 'yellow' | 'red', shape: 'dot' | 'ring', text: string) => node.status({ fill, shape, text });
-    const count = (word: string, n: number) => word.replace('{n}', String(n)).replace('{m}', String(messages.length));
-
-    function halt(): void {
-      if (timer !== null) clock.clearTimeout(timer);
-      timer = null;
-    }
+    const count = (word: string, n: number) => word.replace('{n}', String(n)).replace('{m}', String(player?.count ?? 0));
 
     function inlineRecord(): Json {
       const raw = config.record;
@@ -114,7 +98,6 @@ export default function psPlayNode(RED: NodeAPI): void {
     }
 
     async function fetchRecord(hub: Hub): Promise<Json> {
-      if (!ref) throw new Shown(WORDS.noRef);
       try {
         const got = await hub.client.openRecord(ref);
         return got.record;
@@ -125,52 +108,36 @@ export default function psPlayNode(RED: NodeAPI): void {
         if (e instanceof Refused && e.status === 404) {
           throw new Shown((hub.client.status().signedIn ? WORDS.notFound : WORDS.notFoundSignedOut).replace('{ref}', ref));
         }
-        if (e instanceof TypeError || (e instanceof Refused && e.code === 'bad-name')) throw new Shown(WORDS.badRef);
         if (e instanceof Refused && e.message && e.message !== e.code) throw new Shown(e.message);
         throw e;
       }
     }
 
-    function begin(hub: Hub, record: Json): void {
-      messages = recordToMessages(record, { site: hub.scene().site }).messages;
-      clock = hub.clock ?? realClock;
+    /** Play `record` from the beginning, by the hub's clock. */
+    function begin(hub: Hub, record: Json, speed: unknown, loop: boolean): void {
+      const clock = hub.clock ?? realClock;
+      const { messages } = recordToMessages(record, { site: hub.scene().site });
+      player = createPlayer({
+        messages,
+        clock,
+        speed,
+        loop,
+        onMessage: ({ topic, payload }, sent) => {
+          hub.push({ topic, payload: structuredClone(payload) }, 'record');
+          node.send({ topic, payload: structuredClone(payload) });
+          if (sent < messages.length && clock.now() - lastShown >= STATUS_MS) {
+            lastShown = clock.now();
+            show('green', 'dot', count(WORDS.playing, sent));
+          }
+        },
+        onEnd: () => show('green', 'ring', count(WORDS.ended, messages.length)),
+      });
       if (!messages.length) {
         show('yellow', 'ring', WORDS.empty);
         return;
       }
-      next = 0;
-      start = clock.now();
       lastShown = -Infinity;
-      step(hub);
-    }
-
-    /** Send every message that is due, then wait for the next one (or go round again, or end). */
-    function step(hub: Hub): void {
-      timer = null;
-      const due = (clock.now() - start) * speed;
-      while (next < messages.length && messages[next].at <= due) {
-        const m = messages[next++];
-        const payload = { ...structuredClone(m.payload), at: start + Math.round(m.at / speed) };
-        hub.push({ topic: m.topic, payload: structuredClone(payload) }, 'record');
-        node.send({ topic: m.topic, payload });
-      }
-      if (next >= messages.length) {
-        if (!loop) {
-          show('green', 'ring', count(WORDS.ended, next));
-          return;
-        }
-        next = 0;
-        start = clock.now();
-        // a record whose every sample is at t = 0 waits a frame before it goes round again
-        timer = clock.setTimeout(() => step(hub), messages[messages.length - 1].at > 0 ? 0 : SNAPSHOT_MS);
-        return;
-      }
-      if (clock.now() - lastShown >= STATUS_MS) {
-        lastShown = clock.now();
-        show('green', 'dot', count(WORDS.playing, next));
-      }
-      const wait = Math.max(0, start + messages[next].at / speed - clock.now());
-      timer = clock.setTimeout(() => step(hub), Math.ceil(wait));
+      player.start();
     }
 
     node.on('input', (msg: any, _send: unknown, done: (err?: Error) => void) => {
@@ -187,46 +154,47 @@ export default function psPlayNode(RED: NodeAPI): void {
         return;
       }
       generation += 1;
-      halt();
+      player?.stop();
       if (command.command === 'stop') {
-        if (messages.length) show('grey', 'ring', count(WORDS.stopped, next));
+        if (player?.count) show('grey', 'ring', count(WORDS.stopped, player.sent()));
         done();
         return;
       }
       if (command.command === 'rewind') {
-        next = 0;
-        if (messages.length) show('grey', 'ring', count(WORDS.rewound, 0));
+        if (player?.count) show('grey', 'ring', count(WORDS.rewound, 0));
         done();
         return;
       }
-      speed = speedOf(command.speed ?? config.speed);
-      loop = typeof command.loop === 'boolean' ? command.loop : config.loop === true;
+      const speed = command.speed ?? config.speed;
+      const loop = typeof command.loop === 'boolean' ? command.loop : config.loop === true;
       const failed = (e: unknown) => {
         show('red', 'ring', e instanceof Shown ? e.message : String((e as Error)?.message ?? e));
         done(e instanceof Error ? e : new Error(String(e)));
       };
       if (source === 'inline' || fetched) {
-        let record: Json;
-        try { record = fetched ?? inlineRecord(); } catch (e) { failed(e); return; }
-        begin(hub, record);
+        try { begin(hub, fetched ?? inlineRecord(), speed, loop); } catch (e) { failed(e); return; }
         done();
         return;
       }
+      if (!ref) { failed(new Shown(WORDS.noRef)); return; }
+      if (!isRecordRef(ref)) { failed(new Shown(WORDS.badRef)); return; }
       const mine = generation;
       show('blue', 'ring', WORDS.fetching);
-      fetchRecord(hub).then((record) => {
-        fetched = record;
-        if (mine === generation) begin(hub, record);
-        done();
-      }, (e) => {
-        if (mine === generation) failed(e);
-        else done();
-      });
+      fetchRecord(hub)
+        .then((record) => {
+          fetched = record;
+          if (mine === generation) begin(hub, record, speed, loop);
+          done();
+        })
+        .catch((e) => {
+          if (mine === generation) failed(e);
+          else done();
+        });
     });
 
     node.on('close', () => {
       generation += 1;
-      halt();
+      player?.stop();
     });
   }
   RED.nodes.registerType('ps play', PsPlay);

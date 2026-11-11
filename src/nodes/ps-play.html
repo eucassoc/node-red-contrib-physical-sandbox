@@ -59,7 +59,7 @@
     <textarea id="node-input-record" rows="8" style="width:70%;font-family:monospace;font-size:12px" placeholder="{ &quot;schemaVersion&quot;: 3, ... }"></textarea>
   </div>
   <div class="form-row ps-play-record">
-    <label for="node-input-ref"><i class="fa fa-cloud"></i> 名前 <small>(Ref)</small></label>
+    <label for="node-input-ref"><i class="fa fa-cloud"></i> PS.com の記録 <small>(Ref)</small></label>
     <input type="text" id="node-input-ref" placeholder="handle/name:バージョン (handle/name[:version])">
   </div>
   <div class="form-row">
@@ -101,7 +101,7 @@
   <h3>詳細</h3>
   <p><b>記録</b>は、このノードに入れた記録の JSON か、PS.com の記録（<code>handle/name</code> または <code>handle/name:バージョン</code>）です。PS.com の記録は、デプロイ後の最初の <code>start</code> で取得し、次のデプロイまで使います。非公開の記録は、Physical Sandbox の画面で PS.com にログインしてから再生してください。</p>
   <p>音楽や映像を合わせて再生するときは、音楽のノードにも同じ inject をつないでください。同じメッセージで同時に始まります。</p>
-  <p>このノードの再生は画面の再生とは別です。再生した動きは、画面の記録には残りません。状態には「再生中 n/m」と表示します。</p>
+  <p>このノードの再生は画面の再生とは別です。再生した動きは、画面の記録には残りません。<code>mqtt out</code> からブローカーを通って <code>ps in</code> に戻ってきたメッセージも、画面は動かしますが記録には残りません。状態には「再生中 n/m」と表示します。</p>
 
   <hr>
   <p>Plays a record's motion in time as <code>ps/&lt;site&gt;/&lt;id&gt;/state</code> messages, on its output and to the Physical Sandbox pane.</p>
@@ -128,5 +128,5 @@
   <h3>Details</h3>
   <p>The <b>Record</b> is a record's JSON put in this node, or a PS.com record (<code>handle/name</code> or <code>handle/name:version</code>), read at the first <code>start</code> after a deploy and kept until the next deploy. For a private record, sign in to PS.com in the Physical Sandbox pane first.</p>
   <p>To play music or a video with it, wire the same inject to the music node too: both start on the same message.</p>
-  <p>This playback is apart from the pane's own, and what it plays is not kept in the pane's record. The status shows 「再生中 n/m」 (playing n of m).</p>
+  <p>This playback is apart from the pane's own, and what it plays is not kept in the pane's record; nor are its messages when they come back through <code>mqtt out</code>, a broker and <code>ps in</code> (they still move the pane). The status shows 「再生中 n/m」 (playing n of m).</p>
 </script>
