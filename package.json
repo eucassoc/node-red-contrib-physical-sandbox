@@ -1,6 +1,6 @@
 {
   "name": "node-red-contrib-physical-sandbox",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Physical Sandbox for Node-RED: a sidebar pane that shows robots on a real site, moved by MQTT messages and records",
   "license": "Apache-2.0",
   "author": "Atsushi Kojo",

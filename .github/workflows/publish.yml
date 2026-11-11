@@ -1,0 +1,43 @@
+# Publish to npm when a version tag (v0.1.0, ...) is pushed.
+#
+# npm trusts this file by name through Trusted Publishing (OIDC): no token is stored anywhere. The
+# trusted publisher on npm is eucassoc/node-red-contrib-physical-sandbox, workflow publish.yml, no
+# environment; renaming this file breaks publishing until npm is told the new name.
+# Run the tests on a computer before tagging (npm test, npm run test:nr5): this workflow only checks
+# the tag against package.json, builds, type-checks and publishes.
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # the short-lived OIDC token npm checks; nothing else
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Trusted publishing needs npm 11.5.1 or later
+        run: npm install -g npm@11
+      - name: The tag names the version in package.json
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match version ${version} in package.json" >&2
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run typecheck
+      - name: What the package holds
+        run: npm pack --dry-run
+      - name: Publish (prepublishOnly builds dist)
+        run: npm publish --access public
