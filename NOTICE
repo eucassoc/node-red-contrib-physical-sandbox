@@ -6,3 +6,5 @@ This product is licensed under the Apache License, Version 2.0.
 This product bundles third-party code in the files it builds into dist/, for the pane in the Node-RED editor:
 
 - three.js r180 (MIT License, Copyright 2010-2025 three.js authors), to draw the robots and the site.
+
+The files in src/pscom/ are copied from PS.com (physicalsandbox.com), by permission of its owner (2026-11-11), and are licensed here under the Apache License, Version 2.0. See src/pscom/PROVENANCE.md.

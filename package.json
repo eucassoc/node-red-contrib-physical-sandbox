@@ -48,5 +48,8 @@
     "node-red-5": "npm:node-red@5.0.9",
     "tsx": "4.23.15",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "three": "0.180.0"
   }
 }
