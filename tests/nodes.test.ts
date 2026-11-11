@@ -471,3 +471,23 @@ test('ps play shows other failures as they are: a TypeError from the client, a t
     await helper.unload();
   }
 });
+
+test('ps play words a PS.com refusal from the plugin\'s own copy of the error classes (a separate bundle)', async () => {
+  const foreign = (name: string, extra: object = {}) => Object.assign(new Error(name === 'Refused' ? 'not-found' : name), { name, ...extra });
+  const cases: [Error, string][] = [
+    [foreign('Refused', { code: 'not-found', status: 404 }), '記録が見つかりませんでした（ada/walk）'],
+    [foreign('Offline'), 'PS.com に接続できませんでした'],
+    [foreign('SignIn'), 'PS.com にログインしてください'],
+  ];
+  for (const [error, text] of cases) {
+    const hub = stubHub({ client: { openRecord: async () => { throw error; }, status: () => ({ signedIn: true, handle: 'ada' }) } });
+    await helper.load(withHub(hub), playFlow({ source: 'record', ref: 'ada/walk' }));
+    const node = helper.getNode('play');
+    const seen = statuses(node);
+    node.on('call:error', () => {});
+    node.receive({ payload: 'start' });
+    await settle();
+    assert.equal((seen.at(-1) as any).text, text, error.name);
+    await helper.unload();
+  }
+});

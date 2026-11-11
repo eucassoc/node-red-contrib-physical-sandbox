@@ -86,12 +86,14 @@ export default function psPlayNode(RED: NodeAPI): void {
         return got.record;
       } catch (e) {
         hub.refreshStatus?.(); // a token PS.com refused is forgotten
-        if (e instanceof Offline) throw new Shown(T('offline'));
-        if (e instanceof SignIn) throw new Shown(T('signIn'));
-        if (e instanceof Refused && e.status === 404) {
+        // By name as well as by class: the plugin and this node are separate bundles, each with its own copy of the classes
+        const refused = e instanceof Refused || (e as Error)?.name === 'Refused';
+        if (e instanceof Offline || (e as Error)?.name === 'Offline') throw new Shown(T('offline'));
+        if (e instanceof SignIn || (e as Error)?.name === 'SignIn') throw new Shown(T('signIn'));
+        if (refused && (e as Refused).status === 404) {
           throw new Shown(T(hub.client.status().signedIn ? 'notFound' : 'notFoundSignedOut', { ref }));
         }
-        if (e instanceof Refused && e.message && e.message !== e.code) throw new Shown(e.message);
+        if (refused && (e as Refused).message && (e as Refused).message !== (e as Refused).code) throw new Shown((e as Refused).message);
         throw e;
       }
     }
