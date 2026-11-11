@@ -4,8 +4,9 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import http from 'node:http';
 import { createHub } from '../src/plugin/hub.js';
-import { registerRoutes, WORDS } from '../src/plugin/routes.js';
+import { registerRoutes, safeName, WORDS } from '../src/plugin/routes.js';
 import { readSettings } from '../src/plugin/settings.js';
 import { pending } from '../src/core/unsent.js';
 import { intrinsicsFromFov, extrinsicsFromPose, projectPoint } from '../src/pscom/camera-model.js';
@@ -26,11 +27,12 @@ function makeBundle(dir: string, id: string, extra: Record<string, unknown> = {}
   writeFileSync(join(dir, 'assets', 'base.bin'), `mesh of ${id}`);
 }
 
-/** The catalog side of PS.com, counting what is asked. */
-function catalogFetch(calls: string[] = []) {
+/** The catalog side of PS.com, counting what is asked; with `hold`, every answer waits for it. */
+function catalogFetch(calls: string[] = [], hold?: () => Promise<void>) {
   return async (url: string) => {
     const u = new URL(url);
     calls.push(u.pathname);
+    if (hold) await hold();
     const json = (body: unknown) => ({ ok: true, status: 200, json: async () => body, arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(body)).buffer });
     if (u.pathname === '/api/catalog/search') {
       const kind = u.searchParams.get('kind');
@@ -45,18 +47,22 @@ function catalogFetch(calls: string[] = []) {
   };
 }
 
-async function setup(o: { catalogBase?: string; localDirs?: string[]; cacheRoot?: string; paneDir?: string; calls?: string[]; userDir?: string } = {}) {
+async function setup(o: { catalogBase?: string; localDirs?: string[]; cacheRoot?: string; paneDir?: string; calls?: string[]; userDir?: string; hold?: () => Promise<void> } = {}) {
   const userDir = o.userDir ?? tmp();
   const settings = readSettings({ catalogBase: o.catalogBase ?? UNREACHABLE, localMachineDirs: o.localDirs ?? [] }, { userDir, env: {} });
   const red = fakeRed({ userDir });
   const clock = fakeClock();
   const hub = createHub(red.RED, { userDir, settings, clock, pollMs: 0 });
-  registerRoutes(red.RED, hub, { paneDir: o.paneDir ?? tmp(), cacheRoot: o.cacheRoot ?? tmp(), fetchImpl: catalogFetch(o.calls) as any });
+  registerRoutes(red.RED, hub, { paneDir: o.paneDir ?? tmp(), cacheRoot: o.cacheRoot ?? tmp(), fetchImpl: catalogFetch(o.calls, o.hold) as any });
   const base = await red.listen();
-  const call = async (method: string, path: string, body?: unknown, init: { type?: string; raw?: Buffer } = {}) => {
+  // The pane's header goes with every call unless `pane: false`
+  const call = async (method: string, path: string, body?: unknown, init: { type?: string; raw?: Buffer; pane?: boolean } = {}) => {
     const res = await fetch(base + path, {
       method,
-      headers: body !== undefined || init.raw ? { 'Content-Type': init.type ?? (init.raw ? 'application/octet-stream' : 'application/json') } : {},
+      headers: {
+        ...(body !== undefined || init.raw ? { 'Content-Type': init.type ?? (init.raw ? 'application/octet-stream' : 'application/json') } : {}),
+        ...(init.pane === false ? {} : { 'X-PS-Pane': '1' }),
+      },
       body: init.raw ? new Uint8Array(init.raw) : body === undefined ? undefined : JSON.stringify(body),
     });
     const text = await res.text();
@@ -174,13 +180,20 @@ test('floor: four clicks and the length of 1→2 decide a new floor and the came
   } finally { await s.close(); }
 });
 
-test('floor: a new floor clicked the other way round is mirrored; a record\'s floor clicked so is refused in Japanese', async () => {
+test('floor: a new floor or a record\'s floor clicked the other way round is refused in Japanese', async () => {
   const s = await setup();
   try {
     const [p1, p2, p3, p4] = pixelsOf(NEW_FLOOR);
     let r = await s.call('POST', '/physical-sandbox/scene/floor', { pixels: [p1, p4, p3, p2], edgesM: [3, 4], width: WIDTH, height: HEIGHT });
+    assert.equal(r.status, 422, r.text);
+    assert.equal(r.json.reason, 'mirrored');
+    assert.equal(r.json.error, WORDS.newReversed);
+    assert.equal(WORDS.newReversed, '床の角の順番が逆回りです。映像の上で、角 1 から時計回りにもう一度指定してください');
+    assert.equal(s.hub.scene().floor, null);
+    assert.equal(s.hub.scene().camera, null);
+    r = await s.call('POST', '/physical-sandbox/scene/floor', { pixels: [p1, p2, p3, p4], edgesM: [4, 3], width: WIDTH, height: HEIGHT });
     assert.equal(r.status, 200, r.text);
-    assert.equal(r.json.mirrored, true);
+    assert.equal(r.json.mirrored, false, 'clockwise on the picture');
 
     // The opened record has its own floor: its corners in its order
     const square = [{ x: -2, y: 0, z: -2 }, { x: 2, y: 0, z: -2 }, { x: 2, y: 0, z: -6 }, { x: -2, y: 0, z: -6 }];
@@ -336,7 +349,7 @@ test('stream/play opens a record (sent, or from PS.com) and plays it to the pane
     assert.notEqual(s.red.retained('ps-pane/status').playing, null);
     r = await s.call('POST', '/physical-sandbox/stream/stop');
     assert.equal(r.json.status.playing, null);
-    assert.equal(s.hub.streamBuffer().length, 1);
+    assert.equal(s.hub.streamBuffer().length, 2, 'the opened record\'s states, however much was played');
     r = await s.call('POST', '/physical-sandbox/stream/clear');
     assert.equal(r.json.status.recorded, 0);
 
@@ -387,7 +400,7 @@ test('saving: signed out keeps an unsent copy; after signing in it is sent; new,
     s.hub.push({ topic: 'ps/local/arm/state', payload: { at: s.clock.now() + 5000, joints: { j: 2 } } }, 'mqtt');
     r = await s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
     assert.deepEqual([r.json.saved, r.json.ref, r.json.version, r.json.mode], [true, 'ada/walk-two', '2', 'over']);
-    assert.equal(fake.record('ada', 'walk-two', '2').traces[0].samples.length, 3);
+    assert.deepEqual(fake.record('ada', 'walk-two', '2').traces[0].samples, [{ t: 0, joints: { j: 2 } }], 'the live state took the place of the arm\'s trace');
 
     // refusals
     r = await s.call('POST', '/physical-sandbox/record/save', { mode: 'new', name: 'Bad Name' });
@@ -457,7 +470,7 @@ test('a JSON body Node-RED did not read (text/plain) is read here; one that is n
   try {
     let r = await s.call('POST', '/physical-sandbox/stream/play', JSON.stringify({ record: walkRecord }), { type: 'text/plain' });
     assert.equal(r.status, 400, 'a JSON string is not an object');
-    const res = await fetch(`${s.base}/physical-sandbox/stream/play`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ record: walkRecord }) });
+    const res = await fetch(`${s.base}/physical-sandbox/stream/play`, { method: 'POST', headers: { 'Content-Type': 'text/plain', 'X-PS-Pane': '1' }, body: JSON.stringify({ record: walkRecord }) });
     assert.equal(res.status, 200);
     r = await s.call('POST', '/physical-sandbox/scene/place', undefined, { raw: Buffer.from('[1,2]'), type: 'application/json' });
     assert.equal(r.status, 400);
@@ -496,4 +509,236 @@ test('the pane page and its files are served from the pane folder only', async (
     assert.equal(existsSync(join(paneDir, 'missing.js')), false);
     assert.equal((await s.call('GET', '/physical-sandbox/pane/static/missing.js')).status, 404);
   } finally { await s.close(); }
+});
+
+/** A promise and the function that settles it. */
+function gate(): { wait: () => Promise<void>; open: () => void } {
+  let open!: () => void;
+  const opened = new Promise<void>((done) => { open = done; });
+  return { wait: () => opened, open };
+}
+
+async function until(check: () => boolean, what: string): Promise<void> {
+  for (let i = 0; i < 200 && !check(); i += 1) await new Promise((done) => setTimeout(done, 5));
+  assert.ok(check(), `waited for ${what}`);
+}
+
+test('place: two places at once get two ids, and a record opened while one waits for the catalog stays opened', { timeout: 20_000 }, async () => {
+  const calls: string[] = [];
+  const held = gate();
+  const s = await setup({ calls, hold: held.wait });
+  try {
+    const one = s.call('POST', '/physical-sandbox/scene/place', { product: 'physical-sandbox/so101:1', xyz: [0, 0] });
+    const two = s.call('POST', '/physical-sandbox/scene/place', { product: 'physical-sandbox/so101:1', xyz: [1, 0] });
+    await until(() => calls.length >= 2, 'both places asking the catalog');
+    held.open();
+    const ids = [(await one).json.device.id, (await two).json.device.id].sort();
+    assert.deepEqual(ids, ['so101-1', 'so101-2']);
+    assert.deepEqual(s.hub.scene().devices.map((d) => d.id).sort(), ['so101-1', 'so101-2']);
+  } finally { await s.close(); }
+
+  const calls2: string[] = [];
+  const held2 = gate();
+  const t = await setup({ calls: calls2, hold: held2.wait });
+  try {
+    const placing = t.call('POST', '/physical-sandbox/scene/place', { product: 'physical-sandbox/so101:1', xyz: [2, 0] });
+    await until(() => calls2.length >= 1, 'the place asking the catalog');
+    assert.equal((await t.call('POST', '/physical-sandbox/stream/play', { record: walkRecord, file: 'walk.record.json' })).status, 200);
+    held2.open();
+    assert.equal((await placing).status, 200);
+    assert.deepEqual(t.hub.scene().devices.map((d) => d.id), ['arm', 'so101-1'], 'the opened record\'s devices and the placed one');
+    assert.deepEqual(t.red.retained('ps-pane/status').opened, { file: 'walk.record.json' });
+  } finally { await t.close(); }
+});
+
+/** Sign the hub in to the fake PS.com and open `ada/<name>` from it. */
+async function signedInWith(fake: FakePsCom, s: Awaited<ReturnType<typeof setup>>, name: string): Promise<void> {
+  await s.hub.client.loginStart();
+  await s.hub.client.loginPoll();
+  const r = await s.call('POST', '/physical-sandbox/stream/play', { ref: `ada/${name}` });
+  assert.equal(r.status, 200, r.text);
+  s.hub.stop();
+}
+
+test('saving: a save while another is under way is refused as busy; saving over twice makes one new version', { timeout: 20_000 }, async () => {
+  const fake = await new FakePsCom().start();
+  fake.seed('ada', 'walk', '1', walkRecord);
+  const s = await setup({ catalogBase: fake.base });
+  try {
+    await signedInWith(fake, s, 'walk');
+    const live = (j: number) => s.hub.push({ topic: 'ps/local/arm/state', payload: { at: s.clock.now() + j * 1000, joints: { j } } }, 'mqtt');
+    live(5);
+    const held = gate();
+    fake.holdPuts = held.wait();
+    const first = s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
+    await until(() => fake.putsWaiting === 1, 'the first save at PS.com');
+    const second = await s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
+    assert.equal(second.status, 409);
+    assert.deepEqual(second.json, { error: '保存中です。終わるまでお待ちください', reason: 'busy' });
+    assert.equal((await s.call('POST', '/physical-sandbox/record/save', { mode: 'new', name: 'other' })).json.reason, 'busy');
+    held.open();
+    fake.holdPuts = null;
+    const r = await first;
+    assert.deepEqual([r.status, r.json.saved, r.json.version], [200, true, '2']);
+    assert.equal(fake.record('ada', 'walk', '3'), undefined);
+    assert.deepEqual([...fake.items.keys()].sort(), ['ada/walk'], 'no walk-2 record');
+    // the next save goes on from the saved version
+    live(6);
+    const again = await s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
+    assert.deepEqual([again.json.saved, again.json.version], [true, '3']);
+  } finally { await s.close(); await fake.stop(); }
+});
+
+test('saving: a record opened while a save is under way stays the opened one', { timeout: 20_000 }, async () => {
+  const fake = await new FakePsCom().start();
+  fake.seed('ada', 'walk', '1', walkRecord);
+  const s = await setup({ catalogBase: fake.base });
+  try {
+    await signedInWith(fake, s, 'walk');
+    const held = gate();
+    fake.holdPuts = held.wait();
+    const saving = s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
+    await until(() => fake.putsWaiting === 1, 'the save at PS.com');
+    assert.equal((await s.call('POST', '/physical-sandbox/stream/play', { record: twoRecord, file: 'other.record.json' })).status, 200);
+    held.open();
+    fake.holdPuts = null;
+    assert.equal((await saving).json.saved, true);
+    assert.deepEqual(s.red.retained('ps-pane/status').opened, { file: 'other.record.json' });
+    assert.deepEqual(s.hub.scene().devices.map((d) => d.id), ['arm', 'box']);
+  } finally { await s.close(); await fake.stop(); }
+});
+
+const twoRecord = {
+  schemaVersion: 3, frame: { frameId: 'site', up: '+Y', unit: 'm' }, markers: [],
+  equipment: {
+    site: { id: 'local' },
+    devices: [
+      { id: 'arm', product: 'physical-sandbox/so101:1', owner: 'viewer', parent: 'site', pose: { xyz: [0, 0, 0], rpy: [0, 0, 0] } },
+      { id: 'box', product: 'physical-sandbox/crate:1', owner: 'viewer', parent: 'site', type: 'item', shape: { sizeM: [0.2, 0.2, 0.2] }, pose: { xyz: [1, 0, 0], rpy: [0, 0, 0] } },
+    ],
+  },
+  names: { arm: 'arm', box: 'box' },
+  traces: [
+    { deviceId: 'arm', samples: [{ t: 0, joints: { j: 0 } }, { t: 0.5, joints: { j: 0.5 } }, { t: 1, joints: { j: 1 } }, { t: 2, joints: { j: 2 } }] },
+    { deviceId: 'box', samples: [{ t: 0, position: [1, 0, 0] }, { t: 0.25, position: [1.5, 0, 0] }, { t: 1.5, position: [2, 0, 0] }] },
+  ],
+  routes: [],
+};
+
+test('saving over a record after half a play, a play at speed 2 or a loop keeps its traces as they were', async () => {
+  const fake = await new FakePsCom().start();
+  fake.seed('ada', 'two', '1', twoRecord);
+  const s = await setup({ catalogBase: fake.base });
+  try {
+    await signedInWith(fake, s, 'two');
+    const plays: [Record<string, unknown>, number][] = [[{}, 600], [{ speed: 2 }, 3000], [{ loop: true }, 5300]];
+    for (const [how, ms] of plays) {
+      const r = await s.call('POST', '/physical-sandbox/stream/play', { ref: 'ada/two', ...how });
+      assert.equal(r.status, 200, r.text);
+      s.clock.advance(ms);
+      await s.call('POST', '/physical-sandbox/stream/stop');
+      const saved = await s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
+      // PS.com answers a body equal to its latest version with that version: nothing changed at all
+      assert.deepEqual([saved.json.saved, saved.json.version, saved.json.unchanged], [true, '1', true], JSON.stringify(how));
+      assert.deepEqual(fake.record('ada', 'two', '1').traces, twoRecord.traces, JSON.stringify(how));
+    }
+    // and an export says the same
+    const exported = await s.call('POST', '/physical-sandbox/record/export', { name: 'two' });
+    assert.deepEqual(JSON.parse(readFileSync(exported.json.file, 'utf8')).traces, twoRecord.traces);
+  } finally { await s.close(); await fake.stop(); }
+});
+
+test('saving: a live state while a record is open changes that device\'s trace only; saving as new keeps the rest and notes basedOn', async () => {
+  const fake = await new FakePsCom().start();
+  fake.seed('ada', 'two', '1', { ...twoRecord, name: '二台' });
+  const s = await setup({ catalogBase: fake.base });
+  try {
+    await signedInWith(fake, s, 'two');
+    const at = s.clock.now();
+    s.hub.push({ topic: 'ps/local/box/state', payload: { at, parent: 'site', xyz: [3, 0, 0] } }, 'mqtt');
+    s.hub.push({ topic: 'ps/local/box/state', payload: { at: at + 1000, parent: 'site', xyz: [4, 0, 0] } }, 'mqtt');
+    const r = await s.call('POST', '/physical-sandbox/record/save', { mode: 'new', name: 'two-live', title: '箱だけ' });
+    assert.deepEqual([r.json.saved, r.json.ref], [true, 'ada/two-live']);
+    const saved = fake.record('ada', 'two-live', '1');
+    assert.equal(saved.basedOn, 'ada/two:1');
+    assert.equal(saved.name, '箱だけ');
+    assert.deepEqual(saved.traces, [twoRecord.traces[0], { deviceId: 'box', samples: [{ t: 0, position: [3, 0, 0] }, { t: 1, position: [4, 0, 0] }] }]);
+    assert.deepEqual(saved.equipment, twoRecord.equipment);
+  } finally { await s.close(); await fake.stop(); }
+});
+
+test('writes come from the pane only: JSON, or the X-PS-Pane header; a cross-site simple request is refused', async () => {
+  const s = await setup();
+  try {
+    const post = (path: string, headers: Record<string, string>, body?: string | Uint8Array) => fetch(`${s.base}/physical-sandbox/${path}`, { method: 'POST', headers, body: body as any });
+    const record = JSON.stringify({ record: walkRecord });
+    let r = await post('stream/play', { 'Content-Type': 'text/plain' }, record);
+    assert.equal(r.status, 403);
+    assert.deepEqual(await r.json(), { error: WORDS.notPane, reason: 'not-pane' });
+    assert.deepEqual(s.hub.scene().devices, [], 'nothing was opened');
+    assert.equal((await post('stream/play', { 'Content-Type': 'application/x-www-form-urlencoded' }, 'record=1')).status, 403);
+    assert.equal((await post('stream/stop', {})).status, 403, 'no body and no header');
+    assert.equal((await post('scene/background?name=a.png', { 'Content-Type': 'application/octet-stream' }, new Uint8Array(PNG))).status, 403);
+    assert.equal(s.hub.scene().background, null);
+
+    assert.equal((await post('stream/play', { 'Content-Type': 'application/json' }, record)).status, 200, 'JSON alone');
+    assert.equal((await post('stream/play', { 'Content-Type': 'text/plain', 'X-PS-Pane': '1' }, record)).status, 200, 'text with the header');
+    assert.equal((await post('stream/stop', { 'X-PS-Pane': '1' })).status, 200);
+    assert.equal((await post('scene/background?name=a.png', { 'Content-Type': 'application/octet-stream', 'X-PS-Pane': '1' }, new Uint8Array(PNG))).status, 200);
+  } finally { await s.close(); }
+});
+
+/** A raw request: the headers, then the chunks `chunks()` gives until null; the answer, how much was written, and whether the connection was closed. */
+function rawPost(base: string, path: string, headers: Record<string, string | number>, chunks: () => Buffer | null): Promise<{ status: number; body: string; written: number; closed: boolean }> {
+  const { hostname, port } = new URL(base);
+  return new Promise((resolve, reject) => {
+    let written = 0;
+    let closed = false;
+    let ended = false;
+    let done = () => {};
+    const req = http.request({ hostname, port, path, method: 'POST', headers }, (res) => {
+      const parts: Buffer[] = [];
+      res.on('data', (c) => parts.push(c));
+      // the server cuts the connection a while after its answer: done when both have happened
+      res.on('end', () => { ended = true; done(); });
+      done = () => { if (ended && closed) resolve({ status: res.statusCode ?? 0, body: Buffer.concat(parts).toString('utf8'), written, closed }); };
+    });
+    // writing on after the answer fails once the server cuts the connection: that is expected
+    req.on('error', (e) => { if (!/EPIPE|ECONNRESET/.test(String((e as NodeJS.ErrnoException).code))) reject(e); });
+    req.on('socket', (socket) => socket.on('close', () => { closed = true; done(); }));
+    const pump = () => {
+      for (;;) {
+        const chunk = chunks();
+        if (!chunk) { req.end(); return; }
+        written += chunk.length;
+        if (!req.write(chunk)) { req.once('drain', pump); return; }
+      }
+    };
+    pump();
+  });
+}
+
+test('a body over the limit is answered 413 at once and no more of it is read', { timeout: 20_000 }, async () => {
+  const s = await setup();
+  try {
+    // Content-Length already over: answered before the body is sent
+    let r = await rawPost(s.base, '/physical-sandbox/scene/background?name=big.png', { 'Content-Type': 'application/octet-stream', 'X-PS-Pane': '1', 'Content-Length': 60 * 1024 * 1024 }, () => null);
+    assert.equal(r.status, 413);
+    assert.equal(JSON.parse(r.body).error, WORDS.backgroundTooLarge);
+    assert.equal(r.closed, true, 'the connection is closed');
+
+    // no length given: the reading stops once the limit is passed
+    const mb = Buffer.alloc(1024 * 1024, 0x20);
+    let sent = 0;
+    r = await rawPost(s.base, '/physical-sandbox/stream/play', { 'Content-Type': 'text/plain', 'X-PS-Pane': '1', 'Transfer-Encoding': 'chunked' }, () => (sent++ < 200 ? mb : null));
+    assert.equal(r.status, 413);
+    assert.equal(JSON.parse(r.body).error, WORDS.tooLarge);
+    assert.equal(r.closed, true);
+    assert.ok(sent < 200, `the server stopped reading (${sent} MB offered)`);
+  } finally { await s.close(); }
+});
+
+test('a background name keeps no .. in it', () => {
+  assert.equal(safeName('../../a..b.png'), 'a.b.png');
+  assert.equal(safeName('..'), 'background');
 });

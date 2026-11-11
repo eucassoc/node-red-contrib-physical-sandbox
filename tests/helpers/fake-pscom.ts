@@ -42,6 +42,9 @@ export class FakePsCom {
   vrStarts = 0;
   /** `[status, body]` every record PUT answers with. */
   failRecord: [number, Record<string, unknown>] | null = null;
+  /** While set, every record PUT waits for it (a save kept in flight); `putsWaiting` counts them. */
+  holdPuts: Promise<void> | null = null;
+  putsWaiting = 0;
   items = new Map<string, Item>();
   calls: { method: string; path: string; auth: string | undefined }[] = [];
   port = 0;
@@ -124,6 +127,11 @@ export class FakePsCom {
     if (method === 'GET') return this.read(key, handle, name, rest, signedIn && handle === this.handle);
     if (method === 'PUT' && rest.length === 1 && rest[0] === 'record') {
       if (!signedIn) return [401, { error: 'signin' }];
+      if (this.holdPuts) {
+        this.putsWaiting += 1;
+        await this.holdPuts;
+        this.putsWaiting -= 1;
+      }
       if (this.failRecord) return this.failRecord;
       if (handle !== this.handle) return [404, { error: 'not-found' }];
       return this.putNext(key, handle, name, u.searchParams, body);

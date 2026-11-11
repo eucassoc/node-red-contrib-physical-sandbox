@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createHub, SNAPSHOT_MS } from '../src/plugin/hub.js';
-import { messagesToRecord } from '../src/core/stream.js';
+import { createHub, normalizeScene, SNAPSHOT_MS } from '../src/plugin/hub.js';
+import { messagesToRecord, recordToMessages } from '../src/core/stream.js';
 import { readSettings } from '../src/plugin/settings.js';
 import { fakeClock, fakeRed } from './helpers/fake-red.js';
 
@@ -112,7 +112,8 @@ test('the snapshot holds the latest state of every device, merged as the pane me
   assert.equal(red.retained('ps-pane/status').recorded, 3);
   hub.clearStream();
   assert.equal(red.retained('ps-pane/status').recorded, 0);
-  assert.equal(red.retained('ps-pane/snapshot').length, 2, 'clearing the stream keeps the latest states');
+  assert.deepEqual(red.retained('ps-pane/snapshot'), [], 'clearing the stream forgets the latest states too');
+  assert.equal(hub.push({ topic: 'ps/local/arm/state', payload: { at: 5, joints: { a: 0 } } }, 'mqtt'), true, 'an earlier at than before the clear is taken again');
 });
 
 test('two panes see the same scene and stream; a pane opened late gets the scene and the latest state at once', () => {
@@ -194,8 +195,8 @@ test('playing a record sends its states in time order, each when it falls due, t
   ]);
   assert.equal(red.retained('ps-pane/status').playing, null);
   assert.equal(clock.pending(), 0, 'nothing is left waiting');
-  // the stream holds what was played, and saving it as a record gives the same traces
-  assert.equal(hub.streamBuffer().length, 5);
+  // the stream holds the opened record on its own time (loaded when it was opened), never what was played
+  assert.deepEqual(hub.streamBuffer(), recordToMessages(twoDeviceRecord).messages);
   assert.deepEqual(messagesToRecord(hub.scene(), hub.streamBuffer()).record.traces, twoDeviceRecord.traces);
   assert.deepEqual(states(red.published)[4].payload, { at: start + 1000, joints: { j: 1 } });
 });
@@ -221,7 +222,7 @@ test('stop ends a play; loop goes round again; speed 2 plays in half the time', 
   assert.equal(clock.pending(), 0);
 });
 
-test('opening a record takes its devices, names and floor, keeps the background, empties the stream', () => {
+test('opening a record takes its devices, names and floor, keeps the background, loads its states as the stream', () => {
   const { red, hub } = setup();
   hub.setScene({ background: { kind: 'still', name: 'x.png' }, camera: { intr: { fx: 1 }, extr: { R: [] } } });
   hub.push({ topic: 'ps/local/old/state', payload: { at: 1, joints: { j: 1 } } }, 'mqtt');
@@ -234,7 +235,8 @@ test('opening a record takes its devices, names and floor, keeps the background,
   assert.deepEqual(scene.floor?.edgesM, [4, 3]);
   assert.equal(scene.siteFrameId, 'sf-9');
   assert.equal(hub.floorIsKnown(), true);
-  assert.deepEqual(hub.streamBuffer(), []);
+  assert.deepEqual(hub.streamBuffer(), recordToMessages(twoDeviceRecord).messages, 'the old stream is gone; the record\'s states are on its own time');
+  assert.equal(red.retained('ps-pane/status').recorded, 5);
   assert.deepEqual(red.retained('ps-pane/snapshot'), []);
   assert.deepEqual(red.retained('ps-pane/status').opened, { ref: 'ada/walk', version: '2', own: true });
 });
@@ -248,4 +250,62 @@ test('a kept copy shows in the status as unsent', () => {
   const { red } = setup(userDir);
   assert.deepEqual(red.retained('ps-pane/status').unsent, [{ name: 'walk', ref: 'walk', mode: 'new' }]);
   assert.ok(existsSync(join(dir, 'walk.send.json')));
+});
+
+test('played messages never go into the stream again: half a play, speed 2 and loops leave the opened record as it was', () => {
+  const { hub, clock } = setup();
+  hub.open(twoDeviceRecord, { file: 'two', record: twoDeviceRecord });
+  const loaded = hub.streamBuffer();
+  hub.play(twoDeviceRecord);
+  clock.advance(400);
+  hub.stop();
+  assert.deepEqual(hub.streamBuffer(), loaded, 'half a play');
+  hub.play(twoDeviceRecord, { speed: 2 });
+  clock.advance(2000);
+  assert.deepEqual(hub.streamBuffer(), loaded, 'speed 2');
+  hub.play(twoDeviceRecord, { loop: true });
+  clock.advance(3500);
+  hub.stop();
+  assert.deepEqual(hub.streamBuffer(), loaded, 'three rounds and a half');
+  // a ps play node's messages are played ones as well
+  assert.equal(hub.push({ topic: 'ps/local/arm/state', payload: { at: clock.now() + 1, joints: { j: 9 } } }, 'record'), true);
+  assert.deepEqual(hub.streamBuffer(), loaded);
+  hub.close();
+});
+
+test('a live or agent state while a record is open takes the place of that device\'s loaded states only', () => {
+  const { hub, clock } = setup();
+  hub.open(twoDeviceRecord, { file: 'two', record: twoDeviceRecord });
+  const at = clock.now();
+  hub.push({ topic: 'ps/local/arm/state', payload: { at, joints: { j: 2 } } }, 'mqtt');
+  hub.push({ topic: 'ps/local/arm/state', payload: { at: at + 500, joints: { j: 3 } } }, 'agent');
+  const buffer = hub.streamBuffer();
+  assert.deepEqual(buffer.filter((m) => m.topic === 'ps/local/box/state'), recordToMessages(twoDeviceRecord).messages.filter((m) => m.topic === 'ps/local/box/state'));
+  assert.deepEqual(buffer.filter((m) => m.topic === 'ps/local/arm/state').map((m) => m.at), [at, at + 500]);
+  const traces = messagesToRecord(hub.scene(), buffer).record.traces;
+  assert.deepEqual(traces, [
+    { deviceId: 'arm', samples: [{ t: 0, joints: { j: 2 } }, { t: 0.5, joints: { j: 3 } }] },
+    twoDeviceRecord.traces[1],
+  ]);
+});
+
+test('the status keeps the unsent list and the login it last read, until it is told to read them again', () => {
+  const userDir = tmp();
+  const { red, hub } = setup(userDir);
+  const dir = join(userDir, 'physical-sandbox', 'unsent');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'walk.record.json'), '{}');
+  writeFileSync(join(dir, 'walk.send.json'), JSON.stringify({ ref: 'walk', mode: 'new', base: null }));
+  hub.push({ topic: 'ps/local/arm/state', payload: { at: 1, joints: { j: 1 } } }, 'mqtt'); // publishes the status
+  assert.equal(red.retained('ps-pane/status').recorded, 1);
+  assert.deepEqual(red.retained('ps-pane/status').unsent, [], 'no file is read for a status about the stream');
+  hub.refreshStatus();
+  assert.deepEqual(red.retained('ps-pane/status').unsent, [{ name: 'walk', ref: 'walk', mode: 'new' }]);
+});
+
+test('a scene\'s background name with a path separator or .. is not taken', () => {
+  for (const name of ['../x.png', 'a/b.png', 'a\\b.png', '..', 'x..png']) {
+    assert.equal(normalizeScene({ background: { kind: 'still', name } }, 'local').background, null, name);
+  }
+  assert.deepEqual(normalizeScene({ background: { kind: 'still', name: 'site photo.png' } }, 'local').background, { kind: 'still', name: 'site photo.png' });
 });

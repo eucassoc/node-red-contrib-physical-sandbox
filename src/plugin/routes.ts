@@ -5,7 +5,12 @@
  * JSON bodies: Node-RED's admin app already reads `application/json` up to its `apiMaxLength`
  * (5 MB by default) before these routes; a bigger body (a long record to play) is sent with another
  * content type (`text/plain`) and read here, up to 20 MB. The background picture comes as the raw
- * file (`application/octet-stream`, `?name=`), up to 50 MB, and never leaves this machine.
+ * file (`application/octet-stream`, `?name=`), up to 50 MB, and never leaves this machine. A body
+ * over its limit is answered 413 at once and the connection is closed: the rest is not read.
+ *
+ * Every POST comes from the pane: `application/json`, or the header `X-PS-Pane: 1` (a text body,
+ * the picture, no body). A page on another site can send neither without the browser asking
+ * first, so with no adminAuth a page the person happens to open cannot change the scene or save.
  */
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, sep } from 'node:path';
@@ -19,7 +24,7 @@ import {
 } from '../core/machines.js';
 import { Offline, Refused, SignIn, Taken } from '../core/pscom-client.js';
 import { save } from '../core/unsent.js';
-import type { Hub } from './hub.js';
+import { Busy, type Hub, type Opened } from './hub.js';
 
 type Json = Record<string, any>;
 type FetchLike = (url: string, init?: any) => Promise<any>;
@@ -43,6 +48,7 @@ export const WORDS = {
   noBackground: '背景は選択されていません',
   badFloor: '床の角 4 つ（映像の上の位置と映像の大きさ）と、角 1→2・角 2→3 の長さ（m）を指定してください',
   reversed: '角の順番が逆です。角 1 から、同じ回り方で指定し直してください',
+  newReversed: '床の角の順番が逆回りです。映像の上で、角 1 から時計回りにもう一度指定してください',
   flat: '床の遠近が足りず画角が決まりません。カメラをもっと見下ろす位置に置いて、角を指定し直してください',
   badPlace: 'ロボットと置く位置（x, y）を指定してください',
   idTaken: 'その名前はもう使われています。別の名前を指定してください',
@@ -55,6 +61,8 @@ export const WORDS = {
   badName: '名前は英小文字・数字・- の 2〜39 文字で、先頭と末尾は英小文字か数字にしてください',
   notOwn: '上書き保存できるのは、ログイン中のアカウントの PS.com の記録だけです',
   noPane: '画面はまだ用意されていません',
+  notPane: 'Physical Sandbox の画面から操作してください',
+  busy: '保存中です。終わるまでお待ちください',
 };
 
 /** A catalog name (pscom-client.ts NAME). */
@@ -71,20 +79,58 @@ class Answer extends Error {
   constructor(readonly status: number, message: string, readonly reason: string, readonly extra: Json = {}) { super(message); }
 }
 
-/** The whole body, or null when it is longer than `limit` (the rest is read and dropped). */
+/**
+ * The whole body, or null as soon as it is longer than `limit` (or says so in Content-Length):
+ * reading stops there, and the caller answers with `refuseTooLarge`, which closes the connection.
+ */
 function readBody(req: any, limit: number): Promise<Buffer | null> {
   return new Promise((resolve, reject) => {
+    if (Number(req.headers?.['content-length']) > limit) { resolve(null); return; }
     const chunks: Buffer[] = [];
     let size = 0;
-    let over = Number(req.headers?.['content-length']) > limit;
-    req.on('data', (chunk: Buffer) => {
+    let settled = false;
+    const onData = (chunk: Buffer) => {
       size += chunk.length;
-      if (size > limit) over = true;
-      if (!over) chunks.push(chunk);
-    });
-    req.on('end', () => resolve(over ? null : Buffer.concat(chunks)));
-    req.on('error', reject);
+      if (size > limit) {
+        settled = true;
+        req.off('data', onData);
+        req.pause();
+        resolve(null);
+        return;
+      }
+      chunks.push(chunk);
+    };
+    req.on('data', onData);
+    req.on('end', () => { if (!settled) { settled = true; resolve(Buffer.concat(chunks)); } });
+    req.on('error', (e: Error) => { if (!settled) { settled = true; reject(e); } });
   });
+}
+
+/** How long the refused sender is given to read the 413 before the connection is cut. */
+export const REFUSED_GRACE_MS = 1000;
+
+/**
+ * 413, and none of the rest of the body is read. Once the answer is out the connection is half
+ * closed (the sender reads the 413 and the end), the request stays paused (what is still sent
+ * waits in the network buffers, then the sender is held back), and the connection is cut after
+ * REFUSED_GRACE_MS. Cutting it at once would throw the 413 away on the sender's side with the
+ * unread bytes (a reset), so the person would see a broken connection instead of the reason.
+ */
+function refuseTooLarge(req: any, res: any, error: string): void {
+  req.pause();
+  const socket = req.socket;
+  res.on('finish', () => {
+    socket?.end?.();
+    setTimeout(() => req.destroy(), REFUSED_GRACE_MS);
+  });
+  res.status(413).json({ error, reason: 'too-large' });
+}
+
+/** Only the pane writes: a JSON body, or the pane's own header (see the top of this file). */
+function fromPane(req: any, res: any, next: () => void): void {
+  const type = String(req.headers?.['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+  if (req.headers?.['x-ps-pane'] === '1' || type === 'application/json') { next(); return; }
+  res.status(403).json({ error: WORDS.notPane, reason: 'not-pane' });
 }
 
 /** `req.body` as an object: the one Node-RED read, else read here (up to 20 MB). */
@@ -95,7 +141,7 @@ function jsonBody(req: any, res: any, next: () => void): void {
     return;
   }
   readBody(req, JSON_LIMIT).then((bytes) => {
-    if (!bytes) { res.status(413).json({ error: WORDS.tooLarge, reason: 'too-large' }); return; }
+    if (!bytes) { refuseTooLarge(req, res, WORDS.tooLarge); return; }
     const text = bytes.toString('utf8').trim();
     let body: unknown;
     try { body = text ? JSON.parse(text) : {}; } catch { body = null; }
@@ -122,7 +168,7 @@ export function mediaKind(bytes: Buffer): { kind: 'still' | 'video'; type: strin
 export function safeName(given: unknown): string {
   const last = String(typeof given === 'string' ? given : '').split(/[\\/]/).pop() ?? '';
   // eslint-disable-next-line no-control-regex
-  const clean = [...last.replace(/[\u0000-\u001f\u007f]/g, '').replace(/^\.+/, '').trim()].slice(0, 100).join('');
+  const clean = [...last.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\.{2,}/g, '.').replace(/^\.+/, '').trim()].slice(0, 100).join('');
   return clean || 'background';
 }
 
@@ -172,7 +218,9 @@ class CatalogCache {
 export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
   const app = RED.httpAdmin;
   const read = RED.auth.needsPermission('flows.read');
-  const write = RED.auth.needsPermission('flows.write');
+  const needsWrite = RED.auth.needsPermission('flows.write');
+  /** Every POST: the permission, then from the pane only. */
+  const write = [needsWrite, fromPane];
   const P = '/physical-sandbox';
   const fetchImpl: FetchLike = opts.fetchImpl ?? ((url, init) => fetch(url, init));
   const roots = { cacheRoot: opts.cacheRoot ?? defaultCacheRoot(), localDirs: hub.settings.localMachineDirs };
@@ -238,7 +286,7 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
   app.post(`${P}/scene/background`, write, handle(async (req, res) => {
     if (req._body) throw new Answer(415, WORDS.notPicture, 'not-picture'); // a form or JSON is not a picture
     const bytes = await readBody(req, BACKGROUND_LIMIT);
-    if (!bytes) throw new Answer(413, WORDS.backgroundTooLarge, 'too-large');
+    if (!bytes) { refuseTooLarge(req, res, WORDS.backgroundTooLarge); return; }
     const media = mediaKind(bytes);
     if (!media) throw new Answer(415, WORDS.notPicture, 'not-picture');
     const name = safeName(req.query?.name);
@@ -269,8 +317,8 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
       ? pixels.map((p: Json) => ({ u: p.u, v: p.v })) : null;
     if (!clicks || !(finite(width) && width > 0 && finite(height) && height > 0)) throw new Answer(400, WORDS.badFloor, 'bad-floor');
     const size = { width, height };
-    const refused = (reason: unknown) => reason === 'mirrored'
-      ? new Answer(422, WORDS.reversed, 'mirrored') : new Answer(422, WORDS.flat, 'flat');
+    const refused = (reason: unknown, mirrored = WORDS.reversed) => reason === 'mirrored'
+      ? new Answer(422, mirrored, 'mirrored') : new Answer(422, WORDS.flat, 'flat');
     const scene = hub.scene();
 
     // The opened record's floor: its corners, in its order (clicked the other way round is refused)
@@ -282,14 +330,15 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
       return;
     }
 
-    // A new floor: the lens and the depth from the clicks, then the camera; clicked the other way
-    // round, its corners 3 and 4 go to the other side (mirrored)
+    // A new floor: the lens and the depth from the clicks, then the camera. Clicked the other way
+    // round (anticlockwise on the picture: the camera would be under the floor) it is refused, so
+    // corner 1→2 always runs along +x with the floor on its +y side
     if (!(Array.isArray(edgesM) && edgesM.length === 2 && edgesM.every((e) => finite(e) && e > 0))) throw new Answer(400, WORDS.badFloor, 'bad-floor');
     const [edge12M, typed23M] = edgesM as [number, number];
     const found = floorFromClicks(clicks, edge12M, { ...size, edge23M: typed23M });
     if (!found || !('intr' in found) || !found.intr) throw refused(null);
-    const solved = poseFromFloorQuad(clicks, floorScaleFromEdge(clicks, edge12M, found.edge23M), { ...size, intr: found.intr, allowMirror: true });
-    if (!solved?.extr) throw refused(solved?.reason);
+    const solved = poseFromFloorQuad(clicks, floorScaleFromEdge(clicks, edge12M, found.edge23M), { ...size, intr: found.intr, allowMirror: false });
+    if (!solved?.extr) throw refused(solved?.reason, WORDS.newReversed);
     const edge23M = Math.round(found.edge23M * 1000) / 1000;
     hub.setScene({
       camera: { intr: solved.intr, extr: solved.extr },
@@ -307,6 +356,18 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
     }
     if (id !== undefined && !isTopicName(id)) throw new Answer(400, WORDS.badPlace, 'bad-place');
     const turn = finite(yaw) ? yaw : 0;
+
+    // An object of the catalog is an item: a box of its own size (bundle.json's dimensions), else
+    // 0.2 m. Asked before the scene is read: from reading it to setScene nothing may wait, or two
+    // places at once (or a record opened meanwhile) would write over each other
+    const moving = id !== undefined && hub.scene().devices.some((d) => d.id === id);
+    let kind = listedKinds.get(product);
+    let bundle: Json | null = null;
+    if (!moving && kind !== 'machine') {
+      try { bundle = await bundleJsonOf(product); } catch { bundle = null; }
+      kind ??= bundle?.kind === 'object' ? 'object' : 'machine';
+    }
+
     const scene = hub.scene();
     const devices = [...scene.devices];
     const names = { ...scene.names };
@@ -335,13 +396,6 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
       newId = `${stem}-${n}`;
     }
 
-    // An object of the catalog is an item: a box of its own size (bundle.json's dimensions), else 0.2 m
-    let kind = listedKinds.get(product);
-    let bundle: Json | null = null;
-    if (kind !== 'machine') {
-      try { bundle = await bundleJsonOf(product); } catch { bundle = null; }
-      kind ??= bundle?.kind === 'object' ? 'object' : 'machine';
-    }
     const device: Device = {
       id: newId, product, owner: 'viewer', parent: 'site',
       pose: { xyz: [xyz[0], xyz[1], 0], rpy: [0, 0, turn] },
@@ -411,6 +465,7 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
       try {
         got = await hub.client.openRecord(ref);
       } catch (e) {
+        hub.refreshStatus(); // a token PS.com refused is forgotten
         if (e instanceof Offline) throw new Answer(503, WORDS.offline, 'offline');
         if (e instanceof SignIn) throw new Answer(401, WORDS.signIn, 'sign-in');
         if (e instanceof Refused && e.status === 404) throw new Answer(404, `${WORDS.notFound}（${ref}）`, 'not-found');
@@ -437,52 +492,68 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
 
   // ---- saving ----
 
-  app.post(`${P}/record/save`, write, jsonBody, handle(async (req, res) => {
-    const { mode, name, title } = req.body;
+  /**
+   * What a save writes: over the opened record (its states are in the stream on its own time, so
+   * what the stream did not change stays as it was), else the stream as a new record.
+   */
+  function recordToSave(opened: Opened | null, title: string | undefined, basedOn: boolean): { record: Json; skipped: string[] } {
     const scene = hub.scene();
     const buffer = hub.streamBuffer();
-    const opened = hub.openedRecord();
+    const built = messagesToRecord(scene, buffer, { title });
+    if (!opened) return built;
+    const record = mergeStreamInto(opened.record, scene, buffer);
+    if (title) record.name = title;
+    if (basedOn && 'ref' in opened) record.basedOn = `${opened.ref}:${opened.version}`;
+    return { record, skipped: built.skipped };
+  }
+
+  app.post(`${P}/record/save`, write, jsonBody, handle(async (req, res) => {
+    const { mode, name, title } = req.body;
     const words = typeof title === 'string' && title.trim() ? title.trim() : undefined;
-    let record: Json; let target: { ref: string; mode: 'new' | 'over'; base: string | null };
-    const { record: built, skipped } = messagesToRecord(scene, buffer, {
-      title: words, basedOn: opened && 'ref' in opened ? `${opened.ref}:${opened.version}` : undefined,
-    });
-    if (mode === 'new') {
-      if (typeof name !== 'string' || !NAME.test(name)) throw new Answer(400, WORDS.badName, 'bad-name');
-      record = built;
-      target = { ref: name, mode: 'new', base: null };
-    } else if (mode === 'over') {
-      if (!opened || !('ref' in opened) || !opened.own) throw new Answer(409, WORDS.notOwn, 'not-own');
-      record = mergeStreamInto(opened.record, scene, buffer);
-      if (words) record.name = words;
-      target = { ref: opened.ref, mode: 'over', base: opened.latest };
-    } else {
-      throw new Answer(400, WORDS.notJson, 'bad-mode');
-    }
-    let result;
+    if (mode === 'new' && (typeof name !== 'string' || !NAME.test(name))) throw new Answer(400, WORDS.badName, 'bad-name');
+    if (mode !== 'new' && mode !== 'over') throw new Answer(400, WORDS.notJson, 'bad-mode');
+    let answer: Json;
     try {
-      result = await save(hub.dirs.unsent, hub.sender, record, target);
+      answer = await hub.exclusiveSave(async () => {
+        // Everything is read here, inside the one save at a time: the opened record and its latest
+        // version are the ones this save goes over
+        const opened = hub.openedRecord();
+        let target: { ref: string; mode: 'new' | 'over'; base: string | null };
+        if (mode === 'new') {
+          target = { ref: name, mode: 'new', base: null };
+        } else {
+          if (!opened || !('ref' in opened) || !opened.own) throw new Answer(409, WORDS.notOwn, 'not-own');
+          target = { ref: opened.ref, mode: 'over', base: opened.latest };
+        }
+        const { record, skipped } = recordToSave(opened, words, mode === 'new');
+        let result;
+        try {
+          result = await save(hub.dirs.unsent, hub.sender, record, target);
+        } catch (e) {
+          if (e instanceof Taken) throw new Answer(409, e.message, 'taken');
+          if (e instanceof Refused) throw new Answer(e.status >= 400 && e.status < 500 ? e.status : 400, e.message, e.code);
+          throw e;
+        } finally {
+          hub.refreshStatus();
+        }
+        // The saved record is the opened one, unless another was opened while this one was saved
+        if (result.saved && hub.openedRecord() === opened) {
+          hub.setOpened({ ref: result.ref, version: result.version, latest: result.version, own: true, record });
+        }
+        return { ...result, skipped };
+      });
     } catch (e) {
-      if (e instanceof Taken) throw new Answer(409, e.message, 'taken');
-      if (e instanceof Refused) throw new Answer(e.status >= 400 && e.status < 500 ? e.status : 400, e.message, e.code);
+      if (e instanceof Busy) throw new Answer(409, WORDS.busy, 'busy');
       throw e;
-    } finally {
-      hub.publishStatus();
     }
-    if (result.saved) hub.setOpened({ ref: result.ref, version: result.version, latest: result.version, own: true, record });
-    res.json({ ...result, skipped });
+    res.json(answer);
   }));
 
   app.post(`${P}/record/export`, write, jsonBody, handle((req, res) => {
     const { name, title } = req.body;
     const stem = typeof name === 'string' && NAME.test(name) ? name : 'record';
     const words = typeof title === 'string' && title.trim() ? title.trim() : undefined;
-    const opened = hub.openedRecord();
-    const scene = hub.scene();
-    const buffer = hub.streamBuffer();
-    // What a save would make: over the opened record (keeping what the stream did not change), else anew
-    const record = opened ? mergeStreamInto(opened.record, scene, buffer) : messagesToRecord(scene, buffer, { title: words }).record;
-    if (opened && words) record.name = words;
+    const { record } = recordToSave(hub.openedRecord(), words, false);
     mkdirSync(hub.dirs.exports, { recursive: true });
     const text = JSON.stringify(record, null, 1) + '\n';
     for (let k = 1; k < 1000; k += 1) {
@@ -513,8 +584,9 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
     }
   }));
 
-  // A GET that keeps a token when the login is approved: a write
-  app.get(`${P}/login/poll`, write, handle(async (req, res) => {
+  // A GET that keeps a token when the login is approved: a write (it only finishes a login the
+  // person started with a POST, and its answer cannot be read from another site)
+  app.get(`${P}/login/poll`, needsWrite, handle(async (req, res) => {
     const before = hub.client.status().signedIn;
     let status: 'pending' | 'approved' | 'expired';
     try {
@@ -523,7 +595,7 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
       if (e instanceof Offline) throw new Answer(503, WORDS.offline, 'offline');
       throw e;
     }
-    if (status !== 'pending') hub.publishStatus();
+    if (status !== 'pending') hub.refreshStatus();
     if (status === 'approved' && !before) void hub.sendUnsent().catch(() => undefined);
     res.json({ status, login: hub.client.status() });
   }));

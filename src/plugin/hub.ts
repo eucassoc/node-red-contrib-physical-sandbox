@@ -5,8 +5,11 @@
  *   `<userDir>/physical-sandbox/scene.json` and restored at start.
  * - The stream: every message that comes in (`push`, from `ps in`, a record being played or, later,
  *   the agent) is checked as PS.com's devices/state.js checks a broker's (rubbish until it proves
- *   otherwise, an older `at` never wins), sent to every pane, and its state messages are kept in
- *   the stream buffer that a save turns into a record.
+ *   otherwise, an older `at` never wins) and sent to every pane. The stream buffer, what a save
+ *   turns into a record, is the opened record's states on the record's own time (loaded when it is
+ *   opened) and the live (`mqtt`) and `agent` states on their own `at`; a live state for a device
+ *   takes the place of that device's loaded states. What a play sends (`record`) is never kept: the
+ *   record is in the buffer already, so half a play, a faster one or a loop leave it as it was.
  * - The latest state of every device, so that a pane opened late shows what the others show.
  *
  * Panes hear the hub through `RED.comms`: `ps-pane/scene` (retained, the whole scene),
@@ -73,14 +76,21 @@ export interface Hub {
   setScene(patch: Partial<Scene>): Scene;
   /** One message into the stream; false (and nothing else happens) when it is not one or is older. */
   push(message: unknown, from: From): boolean;
-  /** Play a record's state messages into the stream in time; a play under way stops first. */
+  /** Play a record's state messages to the panes in time (not into the buffer); a play under way stops first. */
   play(record: unknown, opts?: { loop?: boolean; speed?: number; source?: string }): { count: number; duration: number };
   stop(): void;
+  /** What a save writes: the opened record's states (on its time), then the live and agent ones. */
   streamBuffer(): Message[];
+  /** Empty the stream buffer and forget the latest states (an empty snapshot goes to the panes). */
   clearStream(): void;
   status(): Status;
+  /** Send the status as it is held (the unsent list and the login as last read). */
   publishStatus(): void;
-  /** Open a record: its scene (keeping the background), an empty stream, and it is the opened record. */
+  /** Read the unsent list and the login again (after a save, a send, a login), then send the status. */
+  refreshStatus(): void;
+  /** Run one save at a time: while one is under way another is refused with `Busy`. */
+  exclusiveSave<T>(fn: () => Promise<T>): Promise<T>;
+  /** Open a record: its scene (keeping the background), its states as the stream, and it is the opened record. */
   open(record: Json, opened: Opened): Scene;
   openedRecord(): Opened | null;
   /** The opened record after a save (the scene and the stream stay as they are). */
@@ -102,12 +112,19 @@ export const SNAPSHOT_MS = 100;
 /** A stream keeps at most this many state messages (about an hour of ten devices at 5/s); later ones still reach the panes. */
 export const STREAM_MAX = 200_000;
 
+/** A save asked for while another is under way. */
+export class Busy extends Error {
+  constructor() { super('a save is under way'); }
+}
+
 const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isPoint = (c: unknown): boolean => isObject(c) && ['x', 'y', 'z'].every((k) => Number.isFinite(c[k]));
 const nameTable = (v: unknown): Record<string, string> =>
   isObject(v) ? Object.fromEntries(Object.entries(v).filter(([k, id]) => isTopicName(k) && typeof id === 'string')) : {};
 const plain = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const round3 = (v: number) => Math.round(v * 1000) / 1000;
+/** A name of a file right in its folder: no path separator, no `..`, no NUL. */
+const isFileName = (v: unknown): v is string => typeof v === 'string' && v !== '' && !/[\\/\0]/.test(v) && !v.includes('..');
 
 export const realClock: Clock = {
   now: () => Date.now(),
@@ -128,7 +145,7 @@ export function normalizeScene(raw: unknown, site: string): Scene {
   return {
     site: isTopicName(s.site) ? s.site : site,
     siteFrameId: typeof s.siteFrameId === 'string' && s.siteFrameId ? s.siteFrameId : null,
-    background: isObject(bg) && (bg.kind === 'still' || bg.kind === 'video') && typeof bg.name === 'string' && bg.name
+    background: isObject(bg) && (bg.kind === 'still' || bg.kind === 'video') && isFileName(bg.name)
       ? { kind: bg.kind, name: bg.name } : null,
     camera: isObject(s.camera) && isObject(s.camera.intr) && isObject(s.camera.extr) ? { intr: s.camera.intr, extr: s.camera.extr } : null,
     floor: isObject(floor) && Array.isArray(floor.corners) && floor.corners.length === 4 && floor.corners.every(isPoint)
@@ -219,17 +236,33 @@ export function createHub(RED: any, opts: HubOptions): Hub {
   // ---- the stream and the latest states ----
 
   const store = newStore();
-  let buffer: Message[] = [];
+  /** The opened record's states, on the record's time; and the live and agent ones, on their own. */
+  let loaded: Message[] = [];
+  let live: Message[] = [];
+  /** The devices (by deviceKey) that `loaded` has states of. */
+  let loadedKeys = new Set<string>();
+  const recordedCount = () => loaded.length + live.length;
   let tickTimer: unknown = null;
   let lastTick = -Infinity;
   let recordedShown = 0;
 
   /** Whether a state for this topic is an item's (the device the name stands for, else what the message says). */
-  function isItemTopic(id: string, payload: Json): boolean {
-    const deviceId = (Object.hasOwn(scene.names, id) ? scene.names[id] : undefined)
+  function deviceIdOf(id: string): string | undefined {
+    return (Object.hasOwn(scene.names, id) ? scene.names[id] : undefined)
       ?? (scene.streamNames && Object.hasOwn(scene.streamNames, id) ? scene.streamNames[id] : undefined);
+  }
+
+  function isItemTopic(id: string, payload: Json): boolean {
+    const deviceId = deviceIdOf(id);
     const device = deviceId === undefined ? undefined : scene.devices.find((d) => d.id === deviceId);
     return device ? device.type === 'item' : payload.type === 'item';
+  }
+
+  /** Which device a state message is of: the device its outside name stands for, else the topic itself. */
+  function deviceKey(topic: string): string {
+    const parsed = parseTopic(topic);
+    const id = parsed ? deviceIdOf(parsed.id) : undefined;
+    return id !== undefined ? `device:${id}` : `topic:${topic}`;
   }
 
   function snapshot(): Message[] {
@@ -242,7 +275,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
   function tick(): void {
     lastTick = clock.now();
     publish(SNAPSHOT_TOPIC, snapshot(), true);
-    if (recordedShown !== buffer.length) publishStatus();
+    if (recordedShown !== recordedCount()) publishStatus();
   }
 
   /** The snapshot at once when the last one is 100 ms old, else once when it is. */
@@ -260,15 +293,33 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     if (topic.kind === 'state') {
       const type = isItemTopic(topic.id, message.payload) ? 'item' : 'mover';
       if (!applyState(store, { id: message.topic, type }, message.payload)) return false;
-      if (buffer.length < STREAM_MAX) buffer.push(message);
+      if (from !== 'record') keep(message);
     }
     publish(STATE_TOPIC, { ...message, from }, false);
     if (topic.kind === 'state') scheduleTick();
     return true;
   }
 
+  /** A live or agent state into the buffer: the first one of a device drops that device's loaded states. */
+  function keep(message: Message): void {
+    if (loadedKeys.size) {
+      const key = deviceKey(message.topic);
+      if (loadedKeys.delete(key)) loaded = loaded.filter((m) => deviceKey(m.topic) !== key);
+    }
+    if (live.length < STREAM_MAX) live.push(message);
+  }
+
+  /** An empty buffer and no latest states (an empty snapshot goes to the panes). */
+  function emptyStream(): void {
+    loaded = [];
+    live = [];
+    loadedKeys = new Set();
+    store.clear();
+  }
+
   function clearStream(): void {
-    buffer = [];
+    emptyStream();
+    tick();
     publishStatus();
   }
 
@@ -356,9 +407,12 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     };
     opened = source;
     openedFloor = cornersKey(from.floor);
-    store.clear();
-    buffer = [];
+    emptyStream();
     const shown = replaceScene(next);
+    // The record's states, on its own time, are the stream now: a save over it changes nothing
+    // until something live comes in
+    loaded = recordToMessages(record, { site: scene.site }).messages;
+    loadedKeys = new Set(loaded.map((m) => deviceKey(m.topic)));
     tick();
     publishStatus();
     return shown;
@@ -366,11 +420,11 @@ export function createHub(RED: any, opts: HubOptions): Hub {
 
   function status(): Status {
     return {
-      login: client.status(),
-      unsent: pending(dirs.unsent).map(({ name, ref, mode }) => ({ name, ref, mode })),
+      login: loginHeld,
+      unsent: unsentHeld,
       playing: run ? { source: run.source, t: round3(((clock.now() - run.start) * run.speed) / 1000), duration: run.duration } : null,
       agentFrames,
-      recorded: buffer.length,
+      recorded: recordedCount(),
       opened: !opened ? null : 'ref' in opened ? { ref: opened.ref, version: opened.version, own: opened.own } : { file: opened.file },
     };
   }
@@ -381,11 +435,36 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     publish(STATUS_TOPIC, now, true);
   }
 
+  // What the status shows of the files (the unsent copies, the kept login), read again only by
+  // refreshStatus: the status goes out many times a second while a stream runs
+  let unsentHeld: Status['unsent'] = [];
+  let loginHeld: LoginStatus = { signedIn: false, handle: null };
+  function readHeld(): void {
+    unsentHeld = pending(dirs.unsent).map(({ name, ref, mode }) => ({ name, ref, mode }));
+    loginHeld = client.status();
+  }
+
+  function refreshStatus(): void {
+    readHeld();
+    publishStatus();
+  }
+
+  let saving = false;
+  async function exclusiveSave<T>(fn: () => Promise<T>): Promise<T> {
+    if (saving) throw new Busy();
+    saving = true;
+    try {
+      return await fn();
+    } finally {
+      saving = false;
+    }
+  }
+
   async function sendUnsent(): Promise<SendAllResult> {
     try {
       return await sendAll(dirs.unsent, sender);
     } finally {
-      publishStatus();
+      refreshStatus();
     }
   }
 
@@ -396,6 +475,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
   }
 
   // What a pane subscribing now is given at once
+  readHeld();
   publish(SCENE_TOPIC, scene, true);
   publish(SNAPSHOT_TOPIC, [], true);
   publishStatus();
@@ -415,10 +495,12 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     push,
     play,
     stop,
-    streamBuffer: () => plain(buffer),
+    streamBuffer: () => plain([...loaded, ...live]),
     clearStream,
     status,
     publishStatus,
+    refreshStatus,
+    exclusiveSave,
     open,
     openedRecord: () => opened,
     setOpened: (next) => { opened = next; publishStatus(); },

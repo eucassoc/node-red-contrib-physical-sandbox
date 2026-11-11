@@ -19,9 +19,10 @@ let RED: any;
 let server: http.Server;
 let base: string;
 let userDir: string;
+let robotsDir: string;
 
 // Install the package as npm would: package.json plus the files it lists, under <userDir>/node_modules.
-async function installBuiltPackage(dir: string): Promise<void> {
+async function installBuiltPackage(dir: string): Promise<string> {
   const pkg = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
   const target = join(dir, 'node_modules', pkg.name);
   await mkdir(target, { recursive: true });
@@ -33,6 +34,7 @@ async function installBuiltPackage(dir: string): Promise<void> {
     join(dir, 'package.json'),
     JSON.stringify({ name: 'node-red-project', private: true, dependencies: { [pkg.name]: pkg.version } }, null, 2),
   );
+  return target;
 }
 
 async function get(path: string, accept: string): Promise<{ status: number; body: string }> {
@@ -42,7 +44,16 @@ async function get(path: string, accept: string): Promise<{ status: number; body
 
 before(async () => {
   userDir = await mkdtemp(join(tmpdir(), 'ps-nr-smoke-'));
-  await installBuiltPackage(userDir);
+  const installed = await installBuiltPackage(userDir);
+  // Files where the installed plugin serves its pane from (the pane itself is built by a later task)
+  await mkdir(join(installed, 'dist', 'pane', 'assets'), { recursive: true });
+  await writeFile(join(installed, 'dist', 'pane', 'smoke.js'), 'export const smoke = 1;\n');
+  await writeFile(join(installed, 'dist', 'pane', 'assets', 'deep.css'), 'body {}\n');
+  // A robot in a local folder
+  robotsDir = await mkdtemp(join(tmpdir(), 'ps-nr-robots-'));
+  await mkdir(join(robotsDir, 'myarm', 'assets'), { recursive: true });
+  await writeFile(join(robotsDir, 'myarm', 'bundle.json'), JSON.stringify({ id: 'myarm', rootLink: 'base', links: { base: { visuals: [{ mesh: 'assets/base.bin' }] } }, joints: [] }));
+  await writeFile(join(robotsDir, 'myarm', 'assets', 'base.bin'), 'mesh of myarm');
   RED = require(nodeRedName);
   server = http.createServer();
   RED.init(server, {
@@ -55,7 +66,7 @@ before(async () => {
     logging: { console: { level: 'off', metrics: false, audit: false } },
     telemetry: { enabled: false },
     editorTheme: { tours: false },
-    physicalSandbox: { site: 'smoke', catalogBase: 'http://127.0.0.1:9' },
+    physicalSandbox: { site: 'smoke', catalogBase: 'http://127.0.0.1:9', localMachineDirs: [robotsDir] },
   });
   server.on('request', RED.httpAdmin);
   await RED.start();
@@ -67,6 +78,7 @@ after(async () => {
   await RED?.stop();
   await new Promise<void>((done) => (server ? server.close(() => done()) : done()));
   if (userDir) await rm(userDir, { recursive: true, force: true });
+  if (robotsDir) await rm(robotsDir, { recursive: true, force: true });
 });
 
 test('the chosen Node-RED is the one running', async () => {
@@ -183,4 +195,35 @@ test('two editors see the same stream, and one that subscribes late gets the sce
       }
     } finally { late.close(); }
   } finally { early.close(); }
+});
+
+test('the routes with a path after them answer under this Node-RED\'s express: pane files and local bundle files', async () => {
+  let r = await get('/physical-sandbox/pane/static/smoke.js', '*/*');
+  assert.equal(r.status, 200);
+  assert.equal(r.body, 'export const smoke = 1;\n');
+  r = await get('/physical-sandbox/pane/static/assets/deep.css', '*/*');
+  assert.equal(r.status, 200);
+  assert.equal(r.body, 'body {}\n');
+  assert.equal((await get('/physical-sandbox/pane/static/missing.js', '*/*')).status, 404);
+  assert.equal((await get('/physical-sandbox/pane/static/%2e%2e/plugin/index.js', '*/*')).status, 404);
+
+  r = await get('/physical-sandbox/bundles/local/0/myarm/bundle.json', 'application/json');
+  assert.equal(r.status, 200);
+  assert.equal(JSON.parse(r.body).id, 'myarm');
+  r = await get('/physical-sandbox/bundles/local/0/myarm/assets/base.bin', '*/*');
+  assert.equal(r.status, 200);
+  assert.equal(r.body, 'mesh of myarm');
+  assert.equal((await get('/physical-sandbox/bundles/local/0/%2e%2e/myarm/bundle.json', '*/*')).status, 404);
+});
+
+test('a write is taken as JSON (read by Node-RED) or with the pane\'s header, and refused as a plain form', async () => {
+  const post = (path: string, headers: Record<string, string>, body?: string) => fetch(`${base}/physical-sandbox/${path}`, { method: 'POST', headers, body });
+  let r = await post('stream/stop', { 'Content-Type': 'text/plain' }, 'x');
+  assert.equal(r.status, 403);
+  assert.equal((await r.json()).reason, 'not-pane');
+  assert.equal((await post('stream/stop', { 'Content-Type': 'application/x-www-form-urlencoded' }, 'a=1')).status, 403);
+  assert.equal((await post('stream/stop', { 'X-PS-Pane': '1' })).status, 200);
+  r = await post('scene/place', { 'Content-Type': 'application/json' }, JSON.stringify({ product: 'myarm', xyz: [1, 2] }));
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).device.id, 'myarm-1');
 });
