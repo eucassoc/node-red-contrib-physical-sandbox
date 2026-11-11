@@ -26,12 +26,17 @@ import vm from 'node:vm';
 
 const EDITOR_HTML = join(import.meta.dirname, '..', '..', 'src', 'plugin', 'editor.html');
 
-/** The editor side of the link, as its own script. */
-export function editorLinkScript(): string {
+/** One script of editor.html by its `data-ps-part`. */
+export function editorScript(part: string): string {
   const html = readFileSync(EDITOR_HTML, 'utf8');
-  const m = /<script[^>]*data-ps-part="editor-link"[^>]*>([\s\S]*?)<\/script>/.exec(html);
-  if (!m) throw new Error('no <script data-ps-part="editor-link"> in editor.html');
+  const m = new RegExp(`<script[^>]*data-ps-part="${part}"[^>]*>([\\s\\S]*?)</script>`).exec(html);
+  if (!m) throw new Error(`no <script data-ps-part="${part}"> in editor.html`);
   return m[1];
+}
+
+/** The editor side of the link, as its own script, with the words it shares with the plugin's script. */
+export function editorLinkScript(): string {
+  return `${editorScript('words')}\n${editorScript('editor-link')}`;
 }
 
 const plain = (value: unknown) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
@@ -64,6 +69,8 @@ export function fakeEditor(o: {
   importResult?: (nodes: any[]) => unknown;
   /** The types installed in this editor; every type when not given. */
   knownTypes?: string[];
+  /** What RED.i18n.lang() says (default ja). */
+  language?: string;
 } = {}): FakeEditor {
   const subscriptions: { topic: string; fn: (topic: string, data: unknown) => void }[] = [];
   const workspace: any[] = plain(o.nodeSet ?? [{ id: 'tab1', type: 'tab', label: 'Flow 1' }]);
@@ -111,6 +118,7 @@ export function fakeEditor(o: {
     return { nodeMap };
   }
   const RED = {
+    i18n: { lang: () => o.language ?? 'ja' },
     comms: { subscribe: (topic: string, fn: (topic: string, data: unknown) => void) => { subscriptions.push({ topic, fn }); } },
     nodes: {
       createCompleteNodeSet(opts: unknown) {

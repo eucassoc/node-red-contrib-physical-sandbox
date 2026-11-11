@@ -2,7 +2,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { floorPrompt, floorRequest, floorStep, idleFloor, lengthOf, type FloorAction, type FloorState } from '../../src/pane/floor-ui.js';
-import { ja } from '../../src/pane/words.js';
+import { ja, setLang } from '../../src/pane/words.js';
+
+setLang('ja'); // these lines are checked in Japanese (the language tests are in words.test.ts)
 
 const run = (state: FloorState, ...actions: FloorAction[]) => actions.reduce(floorStep, state);
 const click = (u: number, v: number): FloorAction => ({ type: 'click', at: { u, v } });

@@ -24,7 +24,7 @@ import {
 import { Offline, SignIn } from '../core/pscom-client.js';
 import { removeCopy } from '../core/unsent.js';
 import { Busy, type Hub } from './hub.js';
-import { Answer, createActions, NAME, WORDS, type Actions } from './actions.js';
+import { Answer, createActions, NAME, PLAIN, WORDS, type Actions } from './actions.js';
 
 export { WORDS };
 
@@ -87,7 +87,7 @@ export const REFUSED_GRACE_MS = 1000;
  * unread bytes (a reset), so the person would see a broken connection instead of the reason.
  * `body` is the answer (the MCP route answers in JSON-RPC).
  */
-export function refuseTooLarge(req: any, res: any, error: string, body: Json = { error, reason: 'too-large' }): void {
+export function refuseTooLarge(req: any, res: any, error: string, body: Json = { error, message: wordsFor(error), reason: 'too-large' }): void {
   req.pause();
   const socket = req.socket;
   res.on('finish', () => {
@@ -98,17 +98,21 @@ export function refuseTooLarge(req: any, res: any, error: string, body: Json = {
   res.status(413).json(body);
 }
 
+/** The words of a refusal in both languages (`message: {ja, en}`), for the pane to pick one; `error` stays Japanese. */
+const wordsFor = (japanese: string): { ja: string; en: string } =>
+  Object.values(PLAIN).find((both) => both.ja === japanese) ?? { ja: japanese, en: japanese };
+
 /** Only the pane writes: a JSON body, or the pane's own header (see the top of this file). */
 export function fromPane(req: any, res: any, next: () => void): void {
   const type = String(req.headers?.['content-type'] ?? '').split(';')[0].trim().toLowerCase();
   if (req.headers?.['x-ps-pane'] === '1' || type === 'application/json') { next(); return; }
-  res.status(403).json({ error: WORDS.notPane, reason: 'not-pane' });
+  res.status(403).json({ error: WORDS.notPane, message: PLAIN.notPane, reason: 'not-pane' });
 }
 
 /** `req.body` as an object: the one Node-RED read, else read here (up to 20 MB). */
 export function jsonBody(req: any, res: any, next: () => void): void {
   if (req._body) {
-    if (!isObject(req.body)) { res.status(400).json({ error: WORDS.notJson, reason: 'not-json' }); return; }
+    if (!isObject(req.body)) { res.status(400).json({ error: WORDS.notJson, message: PLAIN.notJson, reason: 'not-json' }); return; }
     next();
     return;
   }
@@ -117,11 +121,11 @@ export function jsonBody(req: any, res: any, next: () => void): void {
     const text = bytes.toString('utf8').trim();
     let body: unknown;
     try { body = text ? JSON.parse(text) : {}; } catch { body = null; }
-    if (!isObject(body)) { res.status(400).json({ error: WORDS.notJson, reason: 'not-json' }); return; }
+    if (!isObject(body)) { res.status(400).json({ error: WORDS.notJson, message: PLAIN.notJson, reason: 'not-json' }); return; }
     req.body = body;
     req._body = true;
     next();
-  }, () => res.status(400).json({ error: WORDS.notJson, reason: 'not-json' }));
+  }, () => res.status(400).json({ error: WORDS.notJson, message: PLAIN.notJson, reason: 'not-json' }));
 }
 
 /** What a picture or a video is, by its first bytes: PNG, JPEG, WebP, MP4, QuickTime or WebM. */
@@ -173,7 +177,7 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
     try {
       await fn(req, res);
     } catch (e) {
-      if (e instanceof Answer) { res.status(e.status).json({ error: e.message, reason: e.reason, ...e.extra }); return; }
+      if (e instanceof Answer) { res.status(e.status).json({ error: e.message, message: e.words, reason: e.reason, ...e.extra }); return; }
       RED.log?.warn?.(`physical-sandbox: ${req.method} ${req.path}: ${(e as Error)?.stack ?? e}`);
       if (!res.headersSent) res.status(500).json({ error: String((e as Error)?.message ?? e), reason: 'failed' });
     }

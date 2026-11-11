@@ -7,7 +7,10 @@ import { join } from 'node:path';
 import http from 'node:http';
 import { createHub, STREAM_MAX } from '../src/plugin/hub.js';
 import { registerRoutes, safeName, WORDS } from '../src/plugin/routes.js';
-import { WORDS as PANE_WORDS } from '../src/pane/words.js';
+import { WORDS as PANE_WORDS, setLang } from '../src/pane/words.js';
+import { PLAIN } from '../src/plugin/actions.js';
+
+setLang('ja'); // the pane's sentences checked here are the Japanese ones
 import { exportedText, fullLine, savedText, STREAM_MAX as PANE_STREAM_MAX } from '../src/pane/records-ui.js';
 import { readSettings } from '../src/plugin/settings.js';
 import { pending } from '../src/core/unsent.js';
@@ -590,7 +593,7 @@ test('saving: a save while another is under way is refused as busy; saving over 
     await until(() => fake.putsWaiting === 1, 'the first save at PS.com');
     const second = await s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
     assert.equal(second.status, 409);
-    assert.deepEqual(second.json, { error: '保存中です。終わるまでお待ちください', reason: 'busy' });
+    assert.deepEqual(second.json, { error: '保存中です。終わるまでお待ちください', message: PLAIN.busy, reason: 'busy' });
     assert.equal((await s.call('POST', '/physical-sandbox/record/save', { mode: 'new', name: 'other' })).json.reason, 'busy');
     held.open();
     fake.holdPuts = null;
@@ -690,7 +693,7 @@ test('writes come from the pane only: JSON, or the X-PS-Pane header; a cross-sit
     const record = JSON.stringify({ record: walkRecord });
     let r = await post('stream/play', { 'Content-Type': 'text/plain' }, record);
     assert.equal(r.status, 403);
-    assert.deepEqual(await r.json(), { error: WORDS.notPane, reason: 'not-pane' });
+    assert.deepEqual(await r.json(), { error: WORDS.notPane, message: PLAIN.notPane, reason: 'not-pane' });
     assert.deepEqual(s.hub.scene().devices, [], 'nothing was opened');
     assert.equal((await post('stream/play', { 'Content-Type': 'application/x-www-form-urlencoded' }, 'record=1')).status, 403);
     assert.equal((await post('stream/stop', {})).status, 403, 'no body and no header');

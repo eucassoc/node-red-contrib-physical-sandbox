@@ -1,7 +1,26 @@
+<script type="text/javascript" data-ps-part="words">
+  // What the plugin says in the editor, in Japanese and English: one table, one language picked by
+  // Node-RED's editor language (RED.i18n.lang(); `ja…` is Japanese, anything else English).
+  // `psEditorLang()` is also what the pane is told, so both speak the same language.
+  var PS_EDITOR_WORDS = {
+    tabLabel: { ja: 'PS', en: 'PS' },
+    tabName: { ja: 'Physical Sandbox', en: 'Physical Sandbox' },
+    openWindow: { ja: '別ウィンドウで開く', en: 'Open in a window' },
+    proposed: { ja: 'エージェントの提案を読み込みました。確かめてから Deploy してください', en: 'The agent\'s proposal was imported. Check it, then Deploy' },
+  };
+  function psEditorLang() {
+    var language = '';
+    try { language = String(RED.i18n.lang() || ''); } catch (e) { language = ''; }
+    return /^ja/i.test(language) ? 'ja' : 'en';
+  }
+  function psEditorSay(key) {
+    return PS_EDITOR_WORDS[key][psEditorLang()];
+  }
+</script>
 <script type="text/javascript">
   // Editor side of the Physical Sandbox plugin: the sidebar tab holds the pane (an iframe on
   // physical-sandbox/pane) and forwards what the editor hears on ps-pane/# and ps-editor/# to it. The pane says
-  // "ready" when it listens; the editor's token, then the retained scene, snapshot and status held here go to it, so a
+  // "ready" when it listens; the editor's token and language, then the retained scene, snapshot and status held here go to it, so a
   // pane loaded after the editor subscribed starts where the others are.
   (function () {
     var FROM_EDITOR = 'ps-pane-message';
@@ -25,8 +44,7 @@
         var content = $('<div class="ps-pane-tab" style="display:flex;flex-direction:column;height:100%"></div>');
         var bar = $('<div style="flex:none;padding:6px 8px;border-bottom:1px solid var(--red-ui-secondary-border-color, #ddd)"></div>').appendTo(content);
         $('<button type="button" class="red-ui-button red-ui-button-small ps-open-window"></button>')
-          .text('別ウィンドウで開く ')
-          .append($('<small style="opacity:.7"></small>').text('Open in a window'))
+          .text(psEditorSay('openWindow'))
           .appendTo(bar)
           .on('click', function () { window.open(PANE_URL, 'physical-sandbox-pane'); });
         var iframe = $('<iframe class="ps-pane-frame" title="Physical Sandbox" style="flex:1;min-height:0;width:100%;border:0"></iframe>')
@@ -34,8 +52,8 @@
 
         RED.sidebar.addTab({
           id: 'physical-sandbox',
-          label: 'PS',
-          name: 'Physical Sandbox',
+          label: psEditorSay('tabLabel'),
+          name: psEditorSay('tabName'),
           iconClass: 'fa fa-cube',
           content: content,
           enableOnEdit: true,
@@ -49,7 +67,7 @@
           if (event.origin !== window.location.origin || event.source !== iframe[0].contentWindow) return;
           if (event.data && event.data.type === PANE_READY) {
             var target = iframe[0].contentWindow;
-            if (target) target.postMessage({ type: EDITOR_TOKEN, token: editorToken() }, window.location.origin);
+            if (target) target.postMessage({ type: EDITOR_TOKEN, token: editorToken(), lang: psEditorLang() }, window.location.origin);
             for (var topic in held) if (Object.prototype.hasOwnProperty.call(held, topic)) post(topic, held[topic]);
           }
         });
@@ -76,7 +94,7 @@
   // editor; a request whose id was cancelled (another editor answered, or the time ran out) is let go.
   (function () {
     var ANSWER_URL = 'physical-sandbox/editor/answer';
-    var PROPOSED = 'エージェントの提案を読み込みました。確かめてから Deploy してください';
+    // Told to the agent (which passes it on), so it stays in Japanese as the plugin's tools word it
     var NOT_IMPORTED = 'エディタで提案を取り込めませんでした';
     var CANCEL_KEPT_MS = 60000;
     var page = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -125,7 +143,7 @@
       // A touch import leaves the nodes in place with no drag to end it, and only the end of a drag
       // marks the workspace changed: marked here, so Deploy turns active
       RED.nodes.dirty(true);
-      RED.notify(PROPOSED, 'compact');
+      RED.notify(psEditorSay('proposed'), 'compact');
       // nodeMap holds each new node under its old id and under its new one: count the new nodes
       var imported = {};
       for (var key in result.nodeMap) {

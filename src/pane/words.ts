@@ -1,7 +1,6 @@
 /**
- * What the pane says, in Japanese (案内文調, as PS.com's screens) with the English beside it.
- * Buttons and headings show both; a longer line shows the Japanese and keeps the English as its
- * tooltip. Interpolation is named: {n}.
+ * What the pane says, in Japanese (案内文調, as PS.com's screens) and in English. The pane shows one
+ * of them, the language of Node-RED's editor (see lang below). Interpolation is named: {n}.
  */
 export const WORDS = {
   // the background
@@ -99,9 +98,61 @@ export const WORDS = {
 } as const;
 
 export type WordKey = keyof typeof WORDS;
+export type Lang = 'ja' | 'en';
 
 const fill = (text: string, params: Record<string, unknown>) =>
   text.replace(/\{(\w+)\}/g, (all, key) => (Object.hasOwn(params, key) ? String(params[key]) : all));
+
+/** A language setting: `ja…` is Japanese, anything else English. */
+export const langOf = (value: unknown): Lang => (typeof value === 'string' && /^ja/i.test(value) ? 'ja' : 'en');
+
+let posted: Lang | null = null;
+
+function stored(): string | null {
+  try { return globalThis.localStorage?.getItem('editor-language') ?? null; } catch { return null; }
+}
+
+/**
+ * The language of the pane: the one the editor posted (in the sidebar), else the editor's own
+ * setting kept in localStorage (a window of its own, same origin), else the browser's, else English.
+ */
+export function lang(): Lang {
+  if (posted) return posted;
+  const kept = stored();
+  if (kept) return langOf(kept);
+  const browser = (globalThis as { navigator?: { language?: string } }).navigator?.language;
+  return langOf(browser);
+}
+
+// Weakly held: a row the pane drew again is let go
+const tracked = new Set<WeakRef<HTMLElement>>();
+const written = new WeakMap<HTMLElement, { key: WordKey; params: Record<string, unknown> }>();
+const listeners = new Set<() => void>();
+
+/** Run `fn` when the language changes (for text set once, such as a placeholder). */
+export function onLang(fn: () => void): void { listeners.add(fn); }
+
+/** Forget every `onLang` (for tests that mount the pane's parts more than once). */
+export function forgetLangListeners(): void { listeners.clear(); }
+
+/** The language the editor posted (null forgets it); every label shown is written again. */
+export function setLang(value: unknown): void {
+  const next = value === null || value === undefined ? null : langOf(value);
+  if (next === posted) return;
+  posted = next;
+  for (const ref of tracked) {
+    const element = ref.deref();
+    const word = element && written.get(element);
+    if (!element || !word) { tracked.delete(ref); continue; }
+    // Only the text node the label owns is written: a label may hold an input after it
+    const node = element.firstChild;
+    if (node && node.nodeType === 3) node.textContent = say(word.key, word.params);
+  }
+  for (const fn of listeners) fn();
+}
+
+/** The words of a key in the pane's language, filled in. */
+export const say = (key: WordKey, params: Record<string, unknown> = {}): string => fill(WORDS[key][lang()], params);
 
 /** The Japanese of a key, filled in. */
 export const ja = (key: WordKey, params: Record<string, unknown> = {}): string => fill(WORDS[key].ja, params);
@@ -109,18 +160,16 @@ export const ja = (key: WordKey, params: Record<string, unknown> = {}): string =
 /** The English of a key, filled in. */
 export const en = (key: WordKey, params: Record<string, unknown> = {}): string => fill(WORDS[key].en, params);
 
-/** An element showing a key's Japanese with its English beside it, smaller. */
+/** An element showing a key's words in the pane's language (written again when the language changes). */
 export function labelOf(key: WordKey, tag: string = 'span', params: Record<string, unknown> = {}): HTMLElement {
   const element = document.createElement(tag);
-  const english = document.createElement('small');
-  english.className = 'ps-en';
-  english.lang = 'en';
-  english.textContent = en(key, params);
-  element.append(ja(key, params), ' ', english);
+  element.append(say(key, params));
+  tracked.add(new WeakRef(element));
+  written.set(element, { key, params });
   return element;
 }
 
-/** A button labelled with a key (Japanese, English beside it). */
+/** A button labelled with a key. */
 export function buttonOf(key: WordKey, className = 'ps-button'): HTMLButtonElement {
   const button = labelOf(key, 'button') as HTMLButtonElement;
   button.type = 'button';

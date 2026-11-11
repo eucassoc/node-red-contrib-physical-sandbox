@@ -3,7 +3,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { myRecordRows, NAME, openedLine, playAgainBody, playingLine, recordingLine, saveButtons, siteResetOffered, unsentLines } from '../../src/pane/records-ui.js';
 import { machineRows, placedRows, placeRequest } from '../../src/pane/place-ui.js';
-import { ja } from '../../src/pane/words.js';
+import { ja, setLang } from '../../src/pane/words.js';
+
+setLang('ja'); // these lines are checked in Japanese (the language tests are in words.test.ts)
 
 const signedIn = { signedIn: true, handle: 'ada' };
 

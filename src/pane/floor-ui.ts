@@ -7,7 +7,7 @@
  */
 import type { Api } from './comms-client.js';
 import { PaneError } from './comms-client.js';
-import { buttonOf, en, ja, labelOf } from './words.js';
+import { buttonOf, labelOf, onLang, say as word } from './words.js';
 
 export interface Pixel { u: number; v: number }
 
@@ -61,11 +61,11 @@ export function floorStep(state: FloorState, action: FloorAction): FloorState {
     }
     case 'decide': {
       if (state.step !== 'lengths') return state;
-      if (lengthOf(state.edges[0]) === null || lengthOf(state.edges[1]) === null) return { ...state, note: ja('badLength') };
+      if (lengthOf(state.edges[0]) === null || lengthOf(state.edges[1]) === null) return { ...state, note: word('badLength') };
       return { ...state, step: 'deciding', note: null };
     }
     case 'answered':
-      return { step: 'idle', note: ja('floorDecided', { a: shown(action.edgesM[0]), b: shown(action.edgesM[1]) }) };
+      return { step: 'idle', note: word('floorDecided', { a: shown(action.edgesM[0]), b: shown(action.edgesM[1]) }) };
     case 'refused':
       // Clicked the wrong way round, or too flat: the corners again, keeping the lengths
       return state.step === 'idle' ? state : { step: 'corners', corners: [], edges: state.edges, note: action.note };
@@ -85,9 +85,9 @@ export function floorRequest(state: FloorState, size: { width: number; height: n
 
 /** The line that says what to do now. */
 export function floorPrompt(state: FloorState): string | null {
-  if (state.step === 'corners') return ja('cornerNext', { n: state.corners.length + 1 });
-  if (state.step === 'lengths') return ja('lengthsHint');
-  if (state.step === 'deciding') return ja('deciding');
+  if (state.step === 'corners') return word('cornerNext', { n: state.corners.length + 1 });
+  if (state.step === 'lengths') return word('lengthsHint');
+  if (state.step === 'deciding') return word('deciding');
   return null;
 }
 
@@ -145,7 +145,7 @@ export function mountFloorUi(opts: {
   root.append(startButton, prompt, lengths, actions);
 
   startButton.addEventListener('click', () => {
-    if (!opts.pictureSize()) { show(ja('needPicture'), en('needPicture')); return; }
+    if (!opts.pictureSize()) { show(word('needPicture')); return; }
     go({ type: 'start', edges: known });
   });
   decideButton.addEventListener('click', () => { go({ type: 'decide' }); void send(); });
@@ -171,7 +171,7 @@ export function mountFloorUi(opts: {
       const answer = await api.post('scene/floor', body);
       go({ type: 'answered', edgesM: answer.edgesM ?? body.edgesM });
     } catch (e) {
-      go({ type: 'refused', note: e instanceof PaneError ? e.message : ja('failed') });
+      go({ type: 'refused', note: e instanceof PaneError ? e.message : word('failed') });
     }
   }
 

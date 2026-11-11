@@ -20,33 +20,37 @@ import { Busy, type Hub, type Status } from './hub.js';
 type Json = Record<string, any>;
 type FetchLike = (url: string, init?: any) => Promise<any>;
 
-// What the person is told (案内文調); `reason` beside each lets the pane say it in its own words
-export const WORDS = {
-  notJson: '送られた内容を読み込めませんでした',
-  tooLarge: '送られた内容が大きすぎます（20 MB まで）',
-  backgroundTooLarge: '背景のファイルが大きすぎます（50 MB まで）',
-  notPicture: '背景には画像（PNG・JPEG・WebP）か動画（MP4・WebM・QuickTime）を選択してください',
-  noBackground: '背景は選択されていません',
-  badFloor: '床の角 4 つ（映像の上の位置と映像の大きさ）と、角 1→2・角 2→3 の長さ（m）を指定してください',
-  reversed: '角の順番が逆です。角 1 から、同じ回り方でもう一度指定してください',
-  newReversed: '床の角の順番が逆回りです。映像の上で、角 1 から時計回りにもう一度指定してください',
-  flat: '床の遠近が足りず画角を求められません。カメラをもっと見下ろす位置に置いて、角をもう一度指定してください',
-  badPlace: 'ロボットと置く位置（x, y）を指定してください',
-  idTaken: 'その名前はもう使われています。別の名前を指定してください',
-  noDevice: 'その名前のロボットはありません',
-  noProduct: 'そのロボットは見つかりませんでした',
-  noRecord: '記録か、PS.com の記録の名前（handle/name）を指定してください',
-  offline: 'PS.com に接続できませんでした',
-  signIn: 'PS.com にログインしてください',
-  notFound: '記録が見つかりませんでした',
-  badName: '名前は英小文字・数字・- の 2〜39 文字で、先頭と末尾は英小文字か数字にしてください',
-  notOwn: '上書き保存できるのは、ログイン中のアカウントの PS.com の記録だけです',
-  noPane: '画面はまだ用意されていません',
-  notPane: 'Physical Sandbox の画面から操作してください',
-  busy: '保存中です。終わるまでお待ちください',
-  noUnsent: 'その名前の PS.com 未保存の記録はありません',
-  badSite: '現地の名前が正しくありません（英数字など 1〜80 文字で、/ + # は使えません）',
-};
+// What the person is told (案内文調), in both languages: the pane picks one by Node-RED's language, `reason` beside
+// each is the code. The agent's tools (tools/*.ts) use the Japanese (WORDS) and add their own English.
+export const PLAIN = {
+  notJson: { ja: '送られた内容を読み込めませんでした', en: 'The content sent could not be read' },
+  tooLarge: { ja: '送られた内容が大きすぎます（20 MB まで）', en: 'The content sent is too large (20 MB at most)' },
+  backgroundTooLarge: { ja: '背景のファイルが大きすぎます（50 MB まで）', en: 'The background file is too large (50 MB at most)' },
+  notPicture: { ja: '背景には画像（PNG・JPEG・WebP）か動画（MP4・WebM・QuickTime）を選択してください', en: 'Choose an image (PNG, JPEG, WebP) or a video (MP4, WebM, QuickTime) for the background' },
+  noBackground: { ja: '背景は選択されていません', en: 'No background is chosen' },
+  badFloor: { ja: '床の角 4 つ（映像の上の位置と映像の大きさ）と、角 1→2・角 2→3 の長さ（m）を指定してください', en: 'Give the 4 corners of the floor (positions on the picture, and the size of the picture) and the lengths of edges 1→2 and 2→3 (m)' },
+  reversed: { ja: '角の順番が逆です。角 1 から、同じ回り方でもう一度指定してください', en: 'The corners are in the wrong order. Start from corner 1 and give them again in the same direction' },
+  newReversed: { ja: '床の角の順番が逆回りです。映像の上で、角 1 から時計回りにもう一度指定してください', en: 'The floor corners go the wrong way round. Click them again on the picture, clockwise from corner 1' },
+  flat: { ja: '床の遠近が足りず画角を求められません。カメラをもっと見下ろす位置に置いて、角をもう一度指定してください', en: 'The floor has too little perspective to work out the view. Place the camera higher, looking down, and give the corners again' },
+  badPlace: { ja: 'ロボットと置く位置（x, y）を指定してください', en: 'Give a robot and where to place it (x, y)' },
+  idTaken: { ja: 'その名前はもう使われています。別の名前を指定してください', en: 'That name is already in use. Give another name' },
+  noDevice: { ja: 'その名前のロボットはありません', en: 'There is no robot of that name' },
+  noProduct: { ja: 'そのロボットは見つかりませんでした', en: 'That robot was not found' },
+  noRecord: { ja: '記録か、PS.com の記録の名前（handle/name）を指定してください', en: 'Give a record, or the name of a PS.com record (handle/name)' },
+  offline: { ja: 'PS.com に接続できませんでした', en: 'PS.com could not be reached' },
+  signIn: { ja: 'PS.com にログインしてください', en: 'Sign in to PS.com' },
+  notFound: { ja: '記録が見つかりませんでした', en: 'The record was not found' },
+  badName: { ja: '名前は英小文字・数字・- の 2〜39 文字で、先頭と末尾は英小文字か数字にしてください', en: 'A name is 2–39 of a-z, 0-9 and -, starting and ending with a letter or digit' },
+  notOwn: { ja: '上書き保存できるのは、ログイン中のアカウントの PS.com の記録だけです', en: 'Only a PS.com record of the signed-in account can be saved over' },
+  noPane: { ja: '画面はまだ用意されていません', en: 'The pane is not ready yet' },
+  notPane: { ja: 'Physical Sandbox の画面から操作してください', en: 'Use the Physical Sandbox pane for this' },
+  busy: { ja: '保存中です。終わるまでお待ちください', en: 'A save is under way. Please wait until it finishes' },
+  noUnsent: { ja: 'その名前の PS.com 未保存の記録はありません', en: 'There is no record of that name that is not on PS.com' },
+  badSite: { ja: '現地の名前が正しくありません（英数字など 1〜80 文字で、/ + # は使えません）', en: 'The site name is not valid (1–80 characters such as letters and digits; / + # are not allowed)' },
+} as const;
+
+/** The Japanese of each (what the tools and the routes' `error` carry). */
+export const WORDS = Object.fromEntries(Object.entries(PLAIN).map(([key, both]) => [key, both.ja])) as { [K in keyof typeof PLAIN]: string };
 
 /** A catalog name (pscom-client.ts NAME). */
 export const NAME = /^[a-z0-9][a-z0-9-]{0,37}[a-z0-9]$/;
@@ -56,7 +60,13 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
 
 /** An answer other than 200, with the words for the person and a reason code for the pane. */
 export class Answer extends Error {
-  constructor(readonly status: number, message: string, readonly reason: string, readonly extra: Json = {}) { super(message); }
+  /** The words in both languages (the Japanese is `message`); `english` is given for words made up of one of PLAIN's. */
+  readonly words: { ja: string; en: string };
+  constructor(readonly status: number, message: string, readonly reason: string, readonly extra: Json = {}, english?: string) {
+    super(message);
+    const known = Object.values(PLAIN).find((both) => both.ja === message);
+    this.words = { ja: message, en: english ?? known?.en ?? message };
+  }
 }
 
 /** [length, width, height] from a bundle's `dimensions` (an array or {length,width,height}/{x,y,z}), as PS.com's catalog reads it. */
@@ -252,7 +262,7 @@ export function createActions(hub: Hub, opts: ActionOptions = {}): Actions {
         hub.refreshStatus(); // a token PS.com refused is forgotten
         if (e instanceof Offline) throw new Answer(503, WORDS.offline, 'offline');
         if (e instanceof SignIn) throw new Answer(401, WORDS.signIn, 'sign-in');
-        if (e instanceof Refused && e.status === 404) throw new Answer(404, `${WORDS.notFound}（${ref}）`, 'not-found');
+        if (e instanceof Refused && e.status === 404) throw new Answer(404, `${WORDS.notFound}（${ref}）`, 'not-found', {}, `${PLAIN.notFound.en} (${ref})`);
         if (e instanceof Refused || e instanceof TypeError) throw new Answer(400, e instanceof Refused && e.message !== e.code ? e.message : WORDS.noRecord, e instanceof Refused ? e.code : 'bad-ref');
         throw e;
       }

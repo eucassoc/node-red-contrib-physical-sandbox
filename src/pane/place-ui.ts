@@ -6,7 +6,7 @@
 import type { Api } from './comms-client.js';
 import { PaneError } from './comms-client.js';
 import type { PaneScene } from './stage.js';
-import { buttonOf, en, ja, labelOf } from './words.js';
+import { buttonOf, labelOf, say as word } from './words.js';
 
 type Json = Record<string, any>;
 
@@ -31,7 +31,7 @@ export function placedRows(scene: PaneScene | null, missing: { deviceId: string;
   return scene.devices.map((d) => {
     const product = typeof d.product === 'string' ? d.product : '';
     const lost = missing.some((m) => m.deviceId === d.id);
-    return { id: d.id, product, note: lost ? ja('notDrawn', { product: product || d.id }) : null };
+    return { id: d.id, product, note: lost ? word('notDrawn', { product: product || d.id }) : null };
   });
 }
 
@@ -70,7 +70,7 @@ export function mountPlaceUi(opts: {
     try {
       answer = await api.get('machines');
     } catch (e) {
-      opts.say(e instanceof PaneError ? e.message : ja('failed'));
+      opts.say(e instanceof PaneError ? e.message : word('failed'));
       return;
     }
     offline.hidden = answer.offline !== true;
@@ -113,11 +113,11 @@ export function mountPlaceUi(opts: {
     if (!product) return;
     event.preventDefault();
     const point = opts.floorPointAt(event.clientX, event.clientY);
-    if (!point) { opts.say(ja('offFloor'), en('offFloor')); return; }
+    if (!point) { opts.say(word('offFloor')); return; }
     try {
       await api.post('scene/place', placeRequest(product, point));
     } catch (e) {
-      opts.say(e instanceof PaneError ? e.message : ja('failed'));
+      opts.say(e instanceof PaneError ? e.message : word('failed'));
     }
   });
 
@@ -143,7 +143,7 @@ export function mountPlaceUi(opts: {
         try {
           await api.post('scene/remove', { id: row.id });
         } catch (e) {
-          opts.say(e instanceof PaneError ? e.message : ja('failed'));
+          opts.say(e instanceof PaneError ? e.message : word('failed'));
         }
       });
       item.append(name, ' ', product, ' ', remove);

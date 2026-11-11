@@ -13,6 +13,7 @@
  * the editor's token when it has one, always as `Authorization: Bearer`, never in an address.
  */
 
+import { lang } from './words.js';
 import { FRAME_ENCODINGS, FRAME_MAX_SIDE, FRAMES_MAX, frameBudget } from '../core/frames.js';
 
 type Json = Record<string, any>;
@@ -125,8 +126,8 @@ export function connectComms(opts: {
   };
 }
 
-/** Hear the hub through the editor that holds this iframe; `onToken` is given the editor's token (or null). */
-export function listenToEditor(win: any, handlers: PaneHandlers, onToken?: (token: string | null) => void): { close(): void } {
+/** Hear the hub through the editor that holds this iframe; `onToken` is given the editor's token (or null) and its language (`lang`, as RED.i18n.lang() says it; null if none). */
+export function listenToEditor(win: any, handlers: PaneHandlers, onToken?: (token: string | null, lang: string | null) => void): { close(): void } {
   // With onToken, what the editor forwards before its token is let go: it would start requests
   // without the token. The editor sends the retained ones again right after the token.
   let heard = !onToken;
@@ -136,7 +137,7 @@ export function listenToEditor(win: any, handlers: PaneHandlers, onToken?: (toke
       if (heard) dispatch(event.data.topic, event.data.data, handlers);
     } else if (event.data?.type === EDITOR_TOKEN) {
       heard = true;
-      onToken?.(typeof event.data.token === 'string' && event.data.token ? event.data.token : null);
+      onToken?.(typeof event.data.token === 'string' && event.data.token ? event.data.token : null, typeof event.data.lang === 'string' && event.data.lang ? event.data.lang : null);
     }
   };
   win.addEventListener('message', onMessage);
@@ -171,10 +172,18 @@ export function createApi(opts: { base: string; token: () => string | null; fetc
     return token ? { Authorization: `Bearer ${token}` } : {};
   };
 
+  /** A refusal's words in the pane's language: `message: {ja, en}` of the route, else its `error`. */
+  function wordsOf(body: any): string | null {
+    const both = body?.message;
+    const chosen = both && typeof both === 'object' ? both[lang()] : undefined;
+    if (typeof chosen === 'string' && chosen) return chosen;
+    return typeof body?.error === 'string' ? body.error : null;
+  }
+
   async function answer(res: any): Promise<Json> {
     let body: any = null;
     try { body = await res.json(); } catch { body = null; }
-    if (!res.ok) throw new PaneError(typeof body?.error === 'string' ? body.error : `${res.status}`, typeof body?.reason === 'string' ? body.reason : 'failed', res.status);
+    if (!res.ok) throw new PaneError(wordsOf(body) ?? `${res.status}`, typeof body?.reason === 'string' ? body.reason : 'failed', res.status);
     return body ?? {};
   }
 

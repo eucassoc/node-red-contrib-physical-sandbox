@@ -8,7 +8,7 @@ import { mountFloorUi } from './floor-ui.js';
 import { mountPlaceUi } from './place-ui.js';
 import { mountRecordsUi, type PaneStatus } from './records-ui.js';
 import { createPaneStage, type PaneScene } from './stage.js';
-import { en, ja, labelOf } from './words.js';
+import { labelOf, say as word, setLang } from './words.js';
 
 type Json = Record<string, any>;
 
@@ -103,7 +103,7 @@ async function showBackground(bg: PaneScene['background'], force = false): Promi
     if (!res.ok) throw new Error(String(res.status));
     blob = await res.blob();
   } catch {
-    say(ja('backgroundLost'), en('backgroundLost'));
+    say(word('backgroundLost'));
     if (backgroundKey === key) backgroundKey = null; // the next scene tries again
     return;
   }
@@ -155,10 +155,10 @@ chooseInput.addEventListener('change', async () => {
   if (!file) return;
   try {
     const answer = await api.upload('scene/background', file, file.name);
-    say(ja('backgroundSent', { name: answer.background?.name ?? file.name }));
+    say(word('backgroundSent', { name: answer.background?.name ?? file.name }));
     await showBackground(answer.background ?? null, true);
   } catch (e) {
-    say(e instanceof PaneError ? e.message : ja('failed'));
+    say(e instanceof PaneError ? e.message : word('failed'));
   }
 });
 
@@ -247,10 +247,11 @@ const handlers: PaneHandlers = {
   cancel(id) { answers.cancel(id); },
 };
 
-// In the sidebar the editor sends its token before anything else: the robot list waits for it
+// In the sidebar the editor sends its token and its language before anything else: the robot list waits for it
 if (inEditor) {
   let listed = false;
-  listenToEditor(window, handlers, (given) => {
+  listenToEditor(window, handlers, (given, language) => {
+    setLang(language);
     token = given;
     if (!listed) { listed = true; void place.refresh(); }
   });

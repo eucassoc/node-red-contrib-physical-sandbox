@@ -10,7 +10,7 @@
  */
 import type { Api } from './comms-client.js';
 import { PaneError } from './comms-client.js';
-import { buttonOf, en, ja, labelOf } from './words.js';
+import { buttonOf, labelOf, say as word, onLang } from './words.js';
 
 type Json = Record<string, any>;
 
@@ -39,9 +39,9 @@ export function saveButtons(status: PaneStatus | null): { over: boolean; asNew: 
   return { over: Boolean(opened && 'ref' in opened && opened.own === true && status?.login?.signedIn), asNew: true };
 }
 
-export const recordingLine = (status: PaneStatus | null): string => ja('recording', { n: Number(status?.recorded ?? 0) });
+export const recordingLine = (status: PaneStatus | null): string => word('recording', { n: Number(status?.recorded ?? 0) });
 
-export const fullLine = (status: PaneStatus | null): string | null => (status?.full ? ja('recordingFull', { n: STREAM_MAX }) : null);
+export const fullLine = (status: PaneStatus | null): string | null => (status?.full ? word('recordingFull', { n: STREAM_MAX }) : null);
 
 /** 「現地をもとに戻す」 is offered when the scene's site is not the plugin's (a record opened on another one). */
 export const siteResetOffered = (site: string | null, status: PaneStatus | null): boolean =>
@@ -50,30 +50,30 @@ export const siteResetOffered = (site: string | null, status: PaneStatus | null)
 /** `said`, then once the names no robot answers to that a save or an export left out. */
 function withSkipped(said: string, answer: Json): string {
   const skipped = Array.isArray(answer.skipped) ? answer.skipped.filter((n: unknown) => typeof n === 'string') : [];
-  return skipped.length ? `${said} ${ja('skipped', { names: skipped.join('、') })}` : said;
+  return skipped.length ? `${said} ${word('skipped', { names: skipped.join('、') })}` : said;
 }
 
 /** What the pane says after a save: saved, unchanged or kept, then the names left out. */
 export const savedText = (answer: Json): string => withSkipped(answer.saved === false
-  ? ja('savedKept', { reason: answer.reason ?? '' })
-  : ja(answer.unchanged ? 'savedUnchanged' : 'saved', { ref: answer.ref, version: answer.version }), answer);
+  ? word('savedKept', { reason: answer.reason ?? '' })
+  : word(answer.unchanged ? 'savedUnchanged' : 'saved', { ref: answer.ref, version: answer.version }), answer);
 
 /** What the pane says after an export: the file, then the names left out. */
-export const exportedText = (answer: Json): string => withSkipped(ja('exported', { file: answer.file ?? answer.name }), answer);
+export const exportedText = (answer: Json): string => withSkipped(word('exported', { file: answer.file ?? answer.name }), answer);
 
 export function openedLine(status: PaneStatus | null): string {
   const opened = status?.opened;
-  if (!opened) return ja('openedNone');
-  return 'ref' in opened ? ja('openedRef', { ref: opened.ref, version: opened.version }) : ja('openedFile', { file: opened.file });
+  if (!opened) return word('openedNone');
+  return 'ref' in opened ? word('openedRef', { ref: opened.ref, version: opened.version }) : word('openedFile', { file: opened.file });
 }
 
 export function playingLine(status: PaneStatus | null): string | null {
   const playing = status?.playing;
-  return playing ? ja('playing', { source: playing.source, d: Math.round(playing.duration * 10) / 10 }) : null;
+  return playing ? word('playing', { source: playing.source, d: Math.round(playing.duration * 10) / 10 }) : null;
 }
 
 export const unsentLines = (status: PaneStatus | null): { name: string; text: string }[] =>
-  (status?.unsent ?? []).map((u) => ({ name: u.name, text: ja('unsent', { name: u.name }) }));
+  (status?.unsent ?? []).map((u) => ({ name: u.name, text: word('unsent', { name: u.name }) }));
 
 /**
  * What 再生 and 頭へ send: play the record the hub has open, from its copy (never opening it again,
@@ -86,12 +86,12 @@ export function playAgainBody(status: PaneStatus | null): Json | null {
 /** The rows of `GET records/mine` to open, or the line that says why there are none. */
 export function myRecordRows(answer: unknown): { rows: { ref: string; label: string; detail: string }[]; note: string | null } {
   const got = answer as Json | null;
-  if (!got || got.offline === true) return { rows: [], note: ja('myRecordsOffline') };
-  if (got.signedIn === false) return { rows: [], note: ja('myRecordsSignedOut') };
+  if (!got || got.offline === true) return { rows: [], note: word('myRecordsOffline') };
+  if (got.signedIn === false) return { rows: [], note: word('myRecordsSignedOut') };
   const rows = (Array.isArray(got.rows) ? got.rows : [])
     .filter((r: Json) => r && typeof r.ref === 'string' && r.ref && r.version != null)
-    .map((r: Json) => ({ ref: r.ref, label: typeof r.title === 'string' && r.title ? r.title : r.ref, detail: ja('myRecordRow', { ref: r.ref, version: r.version }) }));
-  return { rows, note: rows.length ? null : ja('myRecordsNone') };
+    .map((r: Json) => ({ ref: r.ref, label: typeof r.title === 'string' && r.title ? r.title : r.ref, detail: word('myRecordRow', { ref: r.ref, version: r.version }) }));
+  return { rows, note: rows.length ? null : word('myRecordsNone') };
 }
 
 export interface RecordsUi {
@@ -110,7 +110,7 @@ export function mountRecordsUi(opts: {
   const { api, say } = opts;
   let status: PaneStatus | null = null;
 
-  const fail = (e: unknown) => say(e instanceof PaneError ? e.message : ja('failed'));
+  const fail = (e: unknown) => say(e instanceof PaneError ? e.message : word('failed'));
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className = ''): HTMLElementTagNameMap[K] => {
     const made = document.createElement(tag);
     if (className) made.className = className;
@@ -123,8 +123,8 @@ export function mountRecordsUi(opts: {
   const refRow = el('div', 'ps-row');
   const refInput = el('input');
   refInput.type = 'text';
-  refInput.placeholder = ja('refPlaceholder');
-  refInput.title = en('refPlaceholder');
+  refInput.placeholder = word('refPlaceholder');
+  onLang(() => { refInput.placeholder = word('refPlaceholder'); });
   refInput.name = 'ref';
   const openRefButton = buttonOf('openRef');
   refRow.append(refInput, openRefButton);
@@ -159,15 +159,15 @@ export function mountRecordsUi(opts: {
 
   let site: string | null = null;
   function showSite(): void {
-    siteText.textContent = site ? ja('site', { site }) : '';
-    siteText.title = site ? ja('siteHint', { site }) : '';
+    siteText.textContent = site ? word('site', { site }) : '';
+    siteText.title = site ? word('siteHint', { site }) : '';
     siteResetButton.hidden = !siteResetOffered(site, status);
-    siteResetButton.title = ja('siteResetTitle', { site: status?.defaultSite ?? '' });
+    siteResetButton.title = word('siteResetTitle', { site: status?.defaultSite ?? '' });
   }
   siteResetButton.addEventListener('click', async () => {
     try {
       const answer = await api.post('scene/site', {});
-      say(ja('siteChanged', { site: answer.site }), en('siteChanged', { site: answer.site }));
+      say(word('siteChanged', { site: answer.site }));
     } catch (e) {
       fail(e);
     }
@@ -216,7 +216,7 @@ export function mountRecordsUi(opts: {
     if (!file) return;
     let record: unknown;
     try { record = JSON.parse(await file.text()); } catch { record = null; }
-    if (!record || typeof record !== 'object' || Array.isArray(record)) { say(ja('badFile'), en('badFile')); return; }
+    if (!record || typeof record !== 'object' || Array.isArray(record)) { say(word('badFile')); return; }
     void play({ record, file: file.name });
   });
   playButton.addEventListener('click', () => {
@@ -271,7 +271,7 @@ export function mountRecordsUi(opts: {
   resendButton.addEventListener('click', async () => {
     try {
       const answer = await api.post('unsent/send');
-      say(ja('resent', { n: Array.isArray(answer.sent) ? answer.sent.length : 0 }));
+      say(word('resent', { n: Array.isArray(answer.sent) ? answer.sent.length : 0 }));
     } catch (e) {
       fail(e);
     }
@@ -281,7 +281,7 @@ export function mountRecordsUi(opts: {
   clearButton.addEventListener('click', () => { api.post('stream/clear').catch(fail); });
 
   async function save(body: Json): Promise<boolean> {
-    say(ja('saving'));
+    say(word('saving'));
     try {
       say(savedText(await api.post('record/save', body)));
       return true;
@@ -300,7 +300,7 @@ export function mountRecordsUi(opts: {
   newForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const name = nameInput.value.trim();
-    if (!NAME.test(name)) { say(ja('badName'), en('badName')); return; }
+    if (!NAME.test(name)) { say(word('badName')); return; }
     const title = titleInput.value.trim();
     if (await save({ mode: 'new', name, ...(title ? { title } : {}) })) {
       newForm.hidden = true;
@@ -338,8 +338,7 @@ export function mountRecordsUi(opts: {
       fail(e);
       return;
     }
-    loginText.textContent = ja('loginCode', { url: started.url, code: started.userCode });
-    loginText.title = en('loginCode', { url: started.url, code: started.userCode });
+    loginText.textContent = word('loginCode', { url: started.url, code: started.userCode });
     loginText.dataset.code = String(started.userCode);
     delete loginText.dataset.signedIn;
     if (polling) return;
@@ -349,7 +348,7 @@ export function mountRecordsUi(opts: {
         await new Promise((done) => setTimeout(done, 3000));
         const answer = await api.get('login/poll');
         if (answer.status === 'approved') { loginText.textContent = ''; break; }
-        if (answer.status === 'expired') { loginText.textContent = ja('loginExpired'); break; }
+        if (answer.status === 'expired') { loginText.textContent = word('loginExpired'); break; }
       }
     } catch (e) {
       fail(e);
@@ -384,7 +383,6 @@ export function mountRecordsUi(opts: {
     clearButton.disabled = !status.recorded;
     const full = fullLine(status);
     fullText.textContent = full ?? '';
-    fullText.title = full ? en('recordingFull', { n: STREAM_MAX }) : '';
     fullText.hidden = !full;
     showSite();
 
@@ -400,10 +398,10 @@ export function mountRecordsUi(opts: {
       // A copy that will never go (another account's, a local robot's) can be taken away
       const removeButton = buttonOf('remove', 'ps-button ps-small');
       removeButton.addEventListener('click', async () => {
-        if (!window.confirm(ja('removeUnsentAsk', { name: line.name }))) return;
+        if (!window.confirm(word('removeUnsentAsk', { name: line.name }))) return;
         try {
           await api.post('unsent/remove', { name: line.name });
-          say(ja('removedUnsent', { name: line.name }), en('removedUnsent', { name: line.name }));
+          say(word('removedUnsent', { name: line.name }));
         } catch (e) {
           fail(e);
         }
@@ -424,18 +422,18 @@ export function mountRecordsUi(opts: {
     const login = status.login;
     loginButton.hidden = Boolean(login?.signedIn);
     if (login?.signedIn) {
-      loginText.textContent = ja('signedIn', { handle: login.handle ?? '' });
-      loginText.title = en('signedIn', { handle: login.handle ?? '' });
+      loginText.textContent = word('signedIn', { handle: login.handle ?? '' });
       loginText.dataset.signedIn = '1';
       if (!refInput.value && login.handle) refInput.value = `${login.handle}/`;
     } else if (loginText.dataset.signedIn) {
       // Signed out meanwhile (a token PS.com refused); a code line under way stays
       loginText.textContent = '';
-      loginText.title = '';
       delete loginText.dataset.signedIn;
     }
     agentBox.checked = status.agentFrames === true;
   }
+
+  onLang(() => { showSite(); if (status) setStatus(status); });
 
   return {
     setStatus,
