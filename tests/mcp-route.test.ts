@@ -120,7 +120,7 @@ test('an MCP client on this machine with the key lists ps_status and gets the hu
     const client = await s.client();
     try {
       const { tools } = await client.listTools();
-      assert.deepEqual(tools.map((t) => t.name), ['ps_status', 'ps_flows_read', 'ps_flow_propose']);
+      assert.deepEqual(tools.map((t) => t.name), ['ps_status', 'ps_flows_read', 'ps_flow_propose', 'ps_machines_list', 'ps_machine_joints', 'ps_ik']);
       assert.ok(tools[0].description && /status/i.test(tools[0].description));
       s.hub.setAgentFrames(true);
       const answer: any = await client.callTool({ name: 'ps_status', arguments: {} });
@@ -138,7 +138,7 @@ test('an MCP client on this machine with the key lists ps_status and gets the hu
       // Stateless: each call is a request of its own, and two at once both answer
       const both = await Promise.all([client.callTool({ name: 'ps_status' }), client.listTools()]);
       assert.equal((both[0] as any).content[0].type, 'text');
-      assert.equal(both[1].tools.length, 3);
+      assert.equal(both[1].tools.length, tools.length);
     } finally { await client.close(); }
   } finally { await s.close(); }
 });

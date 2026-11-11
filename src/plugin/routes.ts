@@ -22,8 +22,8 @@ import { isTopicName } from '../pscom/state.js';
 import { deviceStem, parseRef } from '../pscom/catalog-client.js';
 import { messagesToRecord, mergeStreamInto, type Device } from '../core/stream.js';
 import {
-  BUNDLE_ROUTE, contentTypeOf, defaultCacheRoot, fetchCatalogBundleFile, listMachines, resolveBundle, resolveListed, serveBundleFile,
-  type MachineRow, type Resolved,
+  BUNDLE_ROUTE, contentTypeOf, defaultCacheRoot, fetchCatalogBundleFile, listMachines, readBundleJson, resolveBundle, resolveListed, serveBundleFile,
+  type MachineRow,
 } from '../core/machines.js';
 import { Offline, Refused, SignIn, Taken } from '../core/pscom-client.js';
 import { removeCopy, save } from '../core/unsent.js';
@@ -266,18 +266,9 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
     return fetchCatalogBundleFile(ref, rel, { ...catalog, token, fetchImpl: catalogCache.fetchFor(ref, token) });
   };
 
-  /** A resolved bundle's path after `/bundles/<source>/` (decoded). */
-  const pathOf = (r: Resolved): string =>
-    r.bundleUrl.slice(`${BUNDLE_ROUTE}/${r.source}/`.length, -'/bundle.json'.length).split('/').map(decodeURIComponent).join('/');
-
   async function bundleJsonOf(product: string): Promise<Json | null> {
-    const r = await resolveBundle(product, { ...catalog, ...roots, token: hub.client.bearer() });
-    if (r.source === 'catalog') {
-      const got = await catalogFile(pathOf(r), 'bundle.json');
-      return got ? JSON.parse(got.bytes.toString('utf8')) : null;
-    }
-    const file = serveBundleFile(r.source, `${pathOf(r)}/bundle.json`, roots);
-    return file ? JSON.parse(readFileSync(file, 'utf8')) : null;
+    const token = hub.client.bearer();
+    return readBundleJson(product, { ...catalog, ...roots, token }, (ref) => catalogCache.fetchFor(ref, token));
   }
 
   // ---- the pane page ----

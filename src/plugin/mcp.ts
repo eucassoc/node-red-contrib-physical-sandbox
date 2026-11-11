@@ -23,6 +23,7 @@ import type { Hub } from './hub.js';
 import { ensureKey, keyFileIn } from './mcp-key.js';
 import { readBody, refuseTooLarge } from './routes.js';
 import { registerFlowTools } from './tools/flows.js';
+import { machineAccess, registerMachineTools, type MachineAccess } from './tools/machines.js';
 
 export const MCP_ROUTE = '/physical-sandbox/mcp';
 export const MCP_BODY_LIMIT = 5 * 1024 * 1024;
@@ -46,6 +47,8 @@ export interface McpContext {
   hub: Hub;
   /** The link to the open editors and panes; without it, who is open is 'unknown'. */
   link?: EditorLink;
+  /** The robots: the catalog, the psbx cache and the local folders. */
+  machines: MachineAccess;
 }
 
 const rpcError = (code: number, message: string) => ({ jsonrpc: '2.0', error: { code, message }, id: null });
@@ -75,6 +78,7 @@ export function registerTools(server: McpServer, ctx: McpContext): void {
   });
 
   registerFlowTools(server, link);
+  registerMachineTools(server, hub, ctx.machines);
 }
 
 /** A key compared in constant time (both sides hashed, so its length is not given away either). */
@@ -87,17 +91,22 @@ function keyCheck(key: string): (header: unknown) => boolean {
   };
 }
 
-export function mountMcp(RED: any, hub: Hub, opts: { userDir: string; link?: EditorLink }): { newServer: () => McpServer } {
+export function mountMcp(
+  RED: any, hub: Hub,
+  opts: { userDir: string; link?: EditorLink; cacheRoot?: string; fetchImpl?: (url: string, init?: any) => Promise<any> },
+): { newServer: () => McpServer } {
   const app = RED.httpAdmin;
   const keyFile = keyFileIn(opts.userDir);
   const key = ensureKey(opts.userDir);
   if (!/^[0-9a-f]{64}$/i.test(key)) RED.log?.warn?.(`physical-sandbox: the MCP key in ${keyFile} is not 64 hex characters (32 random bytes); it is used as it is`);
   const keyMatches = keyCheck(key);
+  // One for every request's server: what it keeps (bundles of fixed versions) lasts
+  const machines = machineAccess(hub, { cacheRoot: opts.cacheRoot, fetchImpl: opts.fetchImpl });
 
   /** A server with every tool: one per request, as a stateless transport needs (a server holds one transport). */
   const newServer = (): McpServer => {
     const server = new McpServer({ name: 'physical-sandbox', version });
-    registerTools(server, { hub, link: opts.link });
+    registerTools(server, { hub, link: opts.link, machines });
     return server;
   };
 

@@ -1,0 +1,641 @@
+{
+ "_source": "bundle.json of physical-sandbox/openarm version 1 (the PS.com catalog, fetched 2026-11-11), joints, links and chains only: the visuals (meshes) are left out",
+ "id": "openarm",
+ "version": "1794205373",
+ "rootLink": "world",
+ "links": {
+  "world": {
+   "visuals": []
+  },
+  "openarm_body_link0": {
+   "visuals": []
+  },
+  "openarm_left_base_link": {
+   "visuals": []
+  },
+  "openarm_left_link1": {
+   "visuals": []
+  },
+  "openarm_left_link2": {
+   "visuals": []
+  },
+  "openarm_left_link3": {
+   "visuals": []
+  },
+  "openarm_left_link4": {
+   "visuals": []
+  },
+  "openarm_left_link5": {
+   "visuals": []
+  },
+  "openarm_left_link6": {
+   "visuals": []
+  },
+  "openarm_left_ee_base_link": {
+   "visuals": []
+  },
+  "openarm_left_ee_link1": {
+   "visuals": []
+  },
+  "openarm_left_ee_link2": {
+   "visuals": []
+  },
+  "openarm_right_base_link": {
+   "visuals": []
+  },
+  "openarm_right_link1": {
+   "visuals": []
+  },
+  "openarm_right_link2": {
+   "visuals": []
+  },
+  "openarm_right_link3": {
+   "visuals": []
+  },
+  "openarm_right_link4": {
+   "visuals": []
+  },
+  "openarm_right_link5": {
+   "visuals": []
+  },
+  "openarm_right_link6": {
+   "visuals": []
+  },
+  "openarm_right_ee_base_link": {
+   "visuals": []
+  },
+  "openarm_right_ee_link1": {
+   "visuals": []
+  },
+  "openarm_right_ee_link2": {
+   "visuals": []
+  }
+ },
+ "joints": [
+  {
+   "name": "openarm_body_link0_mount_joint",
+   "type": "fixed",
+   "parent": "world",
+   "child": "openarm_body_link0",
+   "origin": {
+    "xyz": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    0.0,
+    0.0,
+    1.0
+   ],
+   "lower": 0.0,
+   "upper": 0.0
+  },
+  {
+   "name": "openarm_left_base_link_mount_joint",
+   "type": "fixed",
+   "parent": "openarm_body_link0",
+   "child": "openarm_left_base_link",
+   "origin": {
+    "xyz": [
+     0.0,
+     0.031,
+     0.698
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    0.0,
+    0.0,
+    1.0
+   ],
+   "lower": 0.0,
+   "upper": 0.0
+  },
+  {
+   "name": "openarm_left_joint1",
+   "type": "revolute",
+   "parent": "openarm_left_base_link",
+   "child": "openarm_left_link1",
+   "origin": {
+    "xyz": [
+     0.0,
+     0.0625,
+     0.0
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "lower": -3.4907,
+   "upper": 1.3963
+  },
+  {
+   "name": "openarm_left_joint2",
+   "type": "revolute",
+   "parent": "openarm_left_link1",
+   "child": "openarm_left_link2",
+   "origin": {
+    "xyz": [
+     0.0,
+     0.0600000000000001,
+     0.0
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "lower": -3.3161,
+   "upper": 0.17453
+  },
+  {
+   "name": "openarm_left_joint3",
+   "type": "revolute",
+   "parent": "openarm_left_link2",
+   "child": "openarm_left_link3",
+   "origin": {
+    "xyz": [
+     0.0,
+     0.0,
+     -0.0662500000000008
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "lower": -1.5708,
+   "upper": 1.5708
+  },
+  {
+   "name": "openarm_left_joint4",
+   "type": "revolute",
+   "parent": "openarm_left_link3",
+   "child": "openarm_left_link4",
+   "origin": {
+    "xyz": [
+     0.0,
+     0.0,
+     -0.15375
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    0.0,
+    -1.0,
+    0.0
+   ],
+   "lower": 0.0,
+   "upper": 2.4435
+  },
+  {
+   "name": "openarm_left_joint5",
+   "type": "revolute",
+   "parent": "openarm_left_link4",
+   "child": "openarm_left_link5",
+   "origin": {
+    "xyz": [
+     0.0,
+     0.0,
+     -0.0955000000000005
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "lower": -1.5708,
+   "upper": 1.5708
+  },
+  {
+   "name": "openarm_left_joint6",
+   "type": "revolute",
+   "parent": "openarm_left_link5",
+   "child": "openarm_left_link6",
+   "origin": {
+    "xyz": [
+     0.0,
+     0.0,
+     -0.120499999999998
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    0.0,
+    -1.0,
+    0.0
+   ],
+   "lower": -0.7854,
+   "upper": 0.7854
+  },
+  {
+   "name": "openarm_left_joint7",
+   "type": "revolute",
+   "parent": "openarm_left_link6",
+   "child": "openarm_left_ee_base_link",
+   "origin": {
+    "xyz": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "lower": -1.5708,
+   "upper": 1.5708
+  },
+  {
+   "name": "openarm_left_finger_joint1",
+   "type": "revolute",
+   "parent": "openarm_left_ee_base_link",
+   "child": "openarm_left_ee_link1",
+   "origin": {
+    "xyz": [
+     -0.0014300000000005003,
+     -0.0180000000000009,
+     -0.0680000000000174
+    ],
+    "rpy": [
+     0.0,
+     -0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "lower": 0.0,
+   "upper": 0.7854
+  },
+  {
+   "name": "openarm_left_finger_joint2",
+   "type": "revolute",
+   "parent": "openarm_left_ee_base_link",
+   "child": "openarm_left_ee_link2",
+   "origin": {
+    "xyz": [
+     -0.0014300000000005003,
+     0.0180000000000012,
+     -0.0680000000000215
+    ],
+    "rpy": [
+     0.0,
+     -0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "lower": 0.0,
+   "upper": 0.7854,
+   "mimic": {
+    "joint": "openarm_left_finger_joint1",
+    "multiplier": 1.0,
+    "offset": 0.0
+   }
+  },
+  {
+   "name": "openarm_right_base_link_mount_joint",
+   "type": "fixed",
+   "parent": "openarm_body_link0",
+   "child": "openarm_right_base_link",
+   "origin": {
+    "xyz": [
+     0.0,
+     -0.031,
+     0.698
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    0.0,
+    0.0,
+    1.0
+   ],
+   "lower": 0.0,
+   "upper": 0.0
+  },
+  {
+   "name": "openarm_right_joint1",
+   "type": "revolute",
+   "parent": "openarm_right_base_link",
+   "child": "openarm_right_link1",
+   "origin": {
+    "xyz": [
+     0.0,
+     -0.0625,
+     0.0
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    0.0,
+    -1.0,
+    0.0
+   ],
+   "lower": -1.3963,
+   "upper": 3.4907
+  },
+  {
+   "name": "openarm_right_joint2",
+   "type": "revolute",
+   "parent": "openarm_right_link1",
+   "child": "openarm_right_link2",
+   "origin": {
+    "xyz": [
+     0.0,
+     -0.0600000000000001,
+     0.0
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "lower": -0.17453,
+   "upper": 3.3161
+  },
+  {
+   "name": "openarm_right_joint3",
+   "type": "revolute",
+   "parent": "openarm_right_link2",
+   "child": "openarm_right_link3",
+   "origin": {
+    "xyz": [
+     0.0,
+     0.0,
+     -0.0662500000000008
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "lower": -1.5708,
+   "upper": 1.5708
+  },
+  {
+   "name": "openarm_right_joint4",
+   "type": "revolute",
+   "parent": "openarm_right_link3",
+   "child": "openarm_right_link4",
+   "origin": {
+    "xyz": [
+     0.0,
+     0.0,
+     -0.15375
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    0.0,
+    -1.0,
+    0.0
+   ],
+   "lower": 0.0,
+   "upper": 2.4435
+  },
+  {
+   "name": "openarm_right_joint5",
+   "type": "revolute",
+   "parent": "openarm_right_link4",
+   "child": "openarm_right_link5",
+   "origin": {
+    "xyz": [
+     0.0,
+     0.0,
+     -0.0955000000000005
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "lower": -1.5708,
+   "upper": 1.5708
+  },
+  {
+   "name": "openarm_right_joint6",
+   "type": "revolute",
+   "parent": "openarm_right_link5",
+   "child": "openarm_right_link6",
+   "origin": {
+    "xyz": [
+     0.0,
+     0.0,
+     -0.120499999999998
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "lower": -0.7854,
+   "upper": 0.7854
+  },
+  {
+   "name": "openarm_right_joint7",
+   "type": "revolute",
+   "parent": "openarm_right_link6",
+   "child": "openarm_right_ee_base_link",
+   "origin": {
+    "xyz": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "lower": -1.5708,
+   "upper": 1.5708
+  },
+  {
+   "name": "openarm_right_finger_joint1",
+   "type": "revolute",
+   "parent": "openarm_right_ee_base_link",
+   "child": "openarm_right_ee_link1",
+   "origin": {
+    "xyz": [
+     -0.0014300000000005003,
+     0.0180000000000009,
+     -0.0680000000000174
+    ],
+    "rpy": [
+     0.0,
+     -0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "lower": -0.7854,
+   "upper": 0.0
+  },
+  {
+   "name": "openarm_right_finger_joint2",
+   "type": "revolute",
+   "parent": "openarm_right_ee_base_link",
+   "child": "openarm_right_ee_link2",
+   "origin": {
+    "xyz": [
+     -0.0014300000000005003,
+     -0.0180000000000012,
+     -0.0680000000000215
+    ],
+    "rpy": [
+     0.0,
+     -0.0,
+     0.0
+    ]
+   },
+   "axis": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "lower": -0.7854,
+   "upper": 0.0,
+   "mimic": {
+    "joint": "openarm_right_finger_joint1",
+    "multiplier": 1.0,
+    "offset": 0.0
+   }
+  }
+ ],
+ "chains": [
+  {
+   "name": "left_arm",
+   "baseLink": "openarm_left_base_link",
+   "tipLink": "openarm_left_ee_base_link",
+   "joints": [
+    "openarm_left_joint1",
+    "openarm_left_joint2",
+    "openarm_left_joint3",
+    "openarm_left_joint4",
+    "openarm_left_joint5",
+    "openarm_left_joint6",
+    "openarm_left_joint7"
+   ]
+  },
+  {
+   "name": "right_arm",
+   "baseLink": "openarm_right_base_link",
+   "tipLink": "openarm_right_ee_base_link",
+   "joints": [
+    "openarm_right_joint1",
+    "openarm_right_joint2",
+    "openarm_right_joint3",
+    "openarm_right_joint4",
+    "openarm_right_joint5",
+    "openarm_right_joint6",
+    "openarm_right_joint7"
+   ]
+  }
+ ]
+}

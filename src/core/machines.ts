@@ -261,6 +261,50 @@ export async function fetchCatalogBundleFile(ref: string, relPath: string, opts:
   } catch { return null; }
 }
 
+/** A resolved bundle's path after `/bundles/<source>/` (decoded): `<handle>/<name>/<version>`, or `<folder index>/<name or @>` for a local one. */
+export const bundlePathOf = (r: Resolved): string =>
+  r.bundleUrl.slice(`${BUNDLE_ROUTE}/${r.source}/`.length, -'/bundle.json'.length).split('/').map(decodeURIComponent).join('/');
+
+/**
+ * A product's bundle.json, parsed, from where `resolveBundle` finds it (and throwing as it does);
+ * null when the file cannot be had. A catalog robot's files are fetched with `catalogFetch(ref)`
+ * when given (the routes keep a cache), else with `opts.fetchImpl`.
+ */
+export async function readBundleJson(product: string, opts: ResolveOptions, catalogFetch?: (ref: string) => FetchLike): Promise<any | null> {
+  const r = await resolveBundle(product, opts);
+  const path = bundlePathOf(r);
+  if (r.source === 'catalog') {
+    const got = await fetchCatalogBundleFile(path, 'bundle.json', { ...opts, fetchImpl: catalogFetch?.(path) ?? opts.fetchImpl });
+    return got ? JSON.parse(got.bytes.toString('utf8')) : null;
+  }
+  const file = serveBundleFile(r.source, `${path}/bundle.json`, opts);
+  return file ? JSON.parse(readFileSync(file, 'utf8')) : null;
+}
+
+/**
+ * The catalog manifest's `profile` of a product (its chains, among others): from the psbx cache's
+ * manifest.json or from the catalog. Null for a local robot, or when there is none.
+ */
+export async function readProfile(product: string, opts: ResolveOptions): Promise<any | null> {
+  const r = await resolveBundle(product, opts);
+  const path = bundlePathOf(r);
+  let manifest: any = null;
+  if (r.source === 'cache') {
+    const seg = path.split('/');
+    const dir = join(opts.cacheRoot, 'catalog', ...seg);
+    const realRoot = real(join(opts.cacheRoot, 'catalog'));
+    const file = real(join(dir, 'manifest.json'));
+    if (seg.length === 3 && realRoot && file && inside(realRoot, file)) manifest = readJson(file);
+  } else if (r.source === 'catalog') {
+    const [handle, name, version] = path.split('/');
+    try {
+      const res = await opts.fetchImpl(`${catalogRoot(opts, { handle, name, version })}/manifest`, authInit(opts));
+      if (res.ok) manifest = await res.json();
+    } catch { manifest = null; }
+  }
+  return manifest && typeof manifest.profile === 'object' && manifest.profile !== null ? manifest.profile : null;
+}
+
 /** `real` is `root` or inside it, after both have had their symlinks resolved. */
 const inside = (root: string, real: string): boolean => real === root || real.startsWith(root.endsWith(sep) ? root : root + sep);
 
