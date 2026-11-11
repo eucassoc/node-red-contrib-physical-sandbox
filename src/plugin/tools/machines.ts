@@ -7,10 +7,9 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { chainOf, chainSpecsOf, solvePosition, toBaseFrame, type KinematicBundle } from '../../core/kinematics.js';
-import { defaultCacheRoot, listMachines, readBundleJson, readProfile, type MachineRow } from '../../core/machines.js';
+import { listMachines, readBundleJson, readProfile, type MachineRow } from '../../core/machines.js';
+import type { Actions } from '../actions.js';
 import type { Hub } from '../hub.js';
-
-type FetchLike = (url: string, init?: any) => Promise<any>;
 
 /** The largest coordinate (and yaw) ps_ik takes: far beyond any site, and far from an overflow. */
 const LIMIT_M = 1000;
@@ -39,35 +38,29 @@ export interface MachineAccess {
   bundle(product: string): Promise<KinematicBundle & Record<string, unknown>>;
 }
 
-/** Bundles of a fixed catalog version (they never change), kept for repeated ps_ik calls. */
-const KEPT_BUNDLES = 20;
-
-export function machineAccess(hub: Hub, opts: { cacheRoot?: string; fetchImpl?: FetchLike } = {}): MachineAccess {
-  const fetchImpl: FetchLike = opts.fetchImpl ?? ((url, init) => fetch(url, init));
-  const roots = { cacheRoot: opts.cacheRoot ?? defaultCacheRoot(), localDirs: hub.settings.localMachineDirs };
-  const where = () => ({ catalogBase: hub.settings.catalogBase, fetchImpl, ...roots, token: hub.client.bearer() });
-  const kept = new Map<string, KinematicBundle & Record<string, unknown>>();
+/**
+ * The robots as the pane's routes reach them (the same actions): one catalog cache, and a listing
+ * notes each robot's kind, so the agent's ps_scene_place takes what the pane's place takes.
+ */
+export function machineAccess(hub: Hub, actions: Actions): MachineAccess {
+  const where = () => ({ ...actions.catalog, ...actions.roots, token: hub.client.bearer() });
 
   return {
-    list: () => listMachines(where()),
+    async list() {
+      const listed = await listMachines(where());
+      actions.noteListed(listed.machines);
+      return listed;
+    },
     async bundle(product) {
       const opts = where();
-      // a private robot's bundle is never given to another account
-      const key = `${opts.token ?? ''}|${product}`;
-      const fixed = /^[^/]+\/[^/:]+:(?!latest$)[^:]+$/.test(product);
-      const known = fixed ? kept.get(key) : undefined;
-      if (known) return known;
-      const bundle = await readBundleJson(product, opts);
+      const cached = (ref: string) => actions.catalogFetchFor(ref, opts.token);
+      const bundle = await readBundleJson(product, opts, cached);
       if (!bundle || typeof bundle !== 'object' || typeof bundle.rootLink !== 'string' || !Array.isArray(bundle.joints)) {
         throw new Error('no bundle.json');
       }
       if (!Array.isArray(bundle.chains) || bundle.chains.length === 0) {
-        const profile = await readProfile(product, opts);
+        const profile = await readProfile(product, { ...opts, fetchImpl: cached(product) });
         if (profile) bundle.profile = profile;
-      }
-      if (fixed) {
-        kept.set(key, bundle);
-        while (kept.size > KEPT_BUNDLES) kept.delete(kept.keys().next().value!);
       }
       return bundle;
     },

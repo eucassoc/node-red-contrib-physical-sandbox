@@ -109,9 +109,9 @@ export function mountMcp(
   const key = ensureKey(opts.userDir);
   if (!/^[0-9a-f]{64}$/i.test(key)) RED.log?.warn?.(`physical-sandbox: the MCP key in ${keyFile} is not 64 hex characters (32 random bytes); it is used as it is`);
   const keyMatches = keyCheck(key);
-  // One for every request's server: what it keeps (bundles of fixed versions) lasts
-  const machines = machineAccess(hub, { cacheRoot: opts.cacheRoot, fetchImpl: opts.fetchImpl });
+  // One for every request's server: the catalog cache and the kinds of the robots listed last
   const actions = opts.actions ?? createActions(hub, { cacheRoot: opts.cacheRoot, fetchImpl: opts.fetchImpl });
+  const machines = machineAccess(hub, actions);
 
   /** A server with every tool: one per request, as a stateless transport needs (a server holds one transport). */
   const newServer = (): McpServer => {

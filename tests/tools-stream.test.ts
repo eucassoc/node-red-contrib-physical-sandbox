@@ -13,7 +13,7 @@ import { createHub } from '../src/plugin/hub.js';
 import { mountMcp, MCP_ROUTE } from '../src/plugin/mcp.js';
 import { WORDS } from '../src/plugin/actions.js';
 import { readSettings } from '../src/plugin/settings.js';
-import { SIGN_IN } from '../src/core/unsent.js';
+import { OFFLINE, SIGN_IN } from '../src/core/unsent.js';
 import { applyState, newStore } from '../src/pscom/state.js';
 import { dispatch } from '../src/pane/comms-client.js';
 import psPlayNode from '../src/nodes/ps-play.js';
@@ -39,13 +39,13 @@ function cache(): string {
   return root;
 }
 
-async function small(o: { catalogBase?: string; adminJsonParser?: boolean } = {}) {
+async function small(o: { catalogBase?: string; adminJsonParser?: boolean; fetchImpl?: (url: string, init?: any) => Promise<any> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ps-tools-stream-'));
   const settings = readSettings({ catalogBase: o.catalogBase ?? UNREACHABLE }, { userDir: dir, env: {} });
   const red = fakeRed({ userDir: dir, adminJsonParser: o.adminJsonParser });
   const clock = fakeClock();
   const hub = createHub(red.RED, { userDir: dir, settings, clock, pollMs: 0 });
-  mountMcp(red.RED, hub, { userDir: dir, cacheRoot: cache() });
+  mountMcp(red.RED, hub, { userDir: dir, cacheRoot: cache(), fetchImpl: o.fetchImpl });
   const url = await red.listen();
   const key = readFileSync(join(dir, 'physical-sandbox', 'mcp-key'), 'utf8').trim();
   const client = new Client({ name: 'test', version: '0.0.0' });
@@ -91,7 +91,10 @@ const wave = (ids = ['so101-1', 'so101-2']) => Array.from({ length: 31 }, (_, k)
   payload: { at: k * 33, joints: { shoulder_pan: angle(k, i), elbow_flex: angle(k, i + 1) } },
 }))).flat();
 
-const STREAM_TOOLS = ['ps_scene_get', 'ps_scene_place', 'ps_scene_remove', 'ps_stream_play', 'ps_stream_stop', 'ps_record_open', 'ps_record_save', 'ps_record_inline'];
+const STREAM_TOOLS = ['ps_scene_get', 'ps_scene_place', 'ps_scene_remove', 'ps_stream_play', 'ps_stream_stop', 'ps_stream_clear', 'ps_record_open', 'ps_record_save', 'ps_record_inline'];
+
+/** The record a save kept on this machine (signed out) under `name`. */
+const keptCopy = (hub: { dirs: { unsent: string } }, name: string): any => JSON.parse(readFileSync(join(hub.dirs.unsent, `${name}.record.json`), 'utf8'));
 
 test('the agent sees the scene, stream and record tools; ps_stream_play says what a message is and that at counts from the first one', async () => {
   const s = await small();
@@ -102,6 +105,10 @@ test('the agent sees the scene, stream and record tools; ps_stream_play says wha
     const play = byName.ps_stream_play.description ?? '';
     assert.match(play, /ps\/<site>\/<id>\/state/);
     assert.match(play, /first/);
+    assert.match(play, /same first at/, 'every device a state at the same first at');
+    assert.match(play, /takes the place of/);
+    assert.match(byName.ps_record_inline.description ?? '', /same first at/);
+    assert.match(byName.ps_record_save.description ?? '', /last ps_stream_play/);
     assert.deepEqual((byName.ps_stream_play.inputSchema as any).required, ['messages']);
     assert.deepEqual((byName.ps_record_save.inputSchema as any).required, ['mode']);
   } finally { await s.close(); }
@@ -119,7 +126,7 @@ test('ps_scene_place then ps_stream_play: a two-arm wave moves the pane in time 
     const pane = paneView(s.red);
     const start = s.clock.now();
     const played = json(await call(s.client, 'ps_stream_play', { messages: wave() }));
-    assert.deepEqual([played.count, played.duration, played.invalid, played.skipped], [62, 0.99, [], []]);
+    assert.deepEqual([played.count, played.duration, played.invalid, played.otherSite, played.unknownNames], [62, 0.99, [], [], []]);
     assert.equal(played.status.playing.source, 'agent');
     pane.update();
     assert.deepEqual(pane.joints('so101-1'), { shoulder_pan: angle(0, 0), elbow_flex: angle(0, 1) });
@@ -146,15 +153,16 @@ test('ps_stream_play: bad messages are answered by index with the reason, anothe
     const messages: unknown[] = wave(['so101-1']);
     messages.splice(3, 0, { topic: 'ps/local/so101-1/state', payload: { joints: { shoulder_pan: 1 } } });
     messages.splice(5, 0, { topic: 'ps/yard/so101-1/state', payload: { at: 99, joints: { shoulder_pan: 1 } } });
-    messages.push(42);
+    messages.push(42, { topic: 'ps/local/ghost/state', payload: { at: 0, joints: { j: 1 } } });
     const played = json(await call(s.client, 'ps_stream_play', { messages, loop: true }));
     assert.deepEqual(played.invalid.map((p: any) => p.index), [3, 33]);
     assert.match(played.invalid[0].reason, /at/);
-    assert.deepEqual(played.skipped, [{ index: 5, site: 'yard' }]);
-    assert.equal(played.count, 31);
+    assert.deepEqual(played.otherSite, [{ index: 5, site: 'yard' }]);
+    assert.deepEqual(played.unknownNames, ['ghost']);
+    assert.equal(played.count, 32);
     assert.ok(played.next, 'the agent is told what was left out');
     s.clock.advance(3000);
-    assert.equal(s.hub.streamBuffer().length, 31, 'a loop keeps the states once');
+    assert.equal(s.hub.streamBuffer().length, 32, 'a loop keeps the states once');
     assert.equal(json(await call(s.client, 'ps_stream_stop')).status.playing, null);
 
     // nothing playable: an error, and nothing stops
@@ -172,9 +180,14 @@ test('ps_record_inline: the record, pasted into a ps play node, plays the same s
   try {
     json(await call(s.client, 'ps_scene_place', { product: 'physical-sandbox/so101:1', xyz: [0, 0] }));
     json(await call(s.client, 'ps_scene_place', { product: 'physical-sandbox/so101:1', xyz: [0.5, 0] }));
-    const messages = [...wave(), { topic: 'ps/local/ghost/state', payload: { at: 0, joints: { j: 1 } } }];
+    const messages = [
+      ...wave(), { topic: 'ps/local/ghost/state', payload: { at: 0, joints: { j: 1 } } },
+      { topic: 'ps/yard/so101-1/state', payload: { at: 0, joints: { j: 1 } } }, { topic: 'ps/yard/so101-2/state', payload: { at: 0, joints: { j: 1 } } },
+    ];
     const inline = json(await call(s.client, 'ps_record_inline', { messages }));
-    assert.deepEqual(inline.skipped, ['ghost'], 'the names no device answers to');
+    assert.deepEqual(inline.unknownNames, ['ghost'], 'the names no device answers to');
+    assert.deepEqual(inline.otherSite, { sites: ['yard'], count: 2 });
+    assert.equal(inline.skipped, undefined, 'one name for one meaning');
     assert.deepEqual(inline.invalid, []);
     assert.equal(inline.record.schemaVersion, 3);
     assert.deepEqual(inline.record.traces.map((t: any) => [t.deviceId, t.samples.length]), [['so101-1', 31], ['so101-2', 31]]);
@@ -252,6 +265,15 @@ test('ps_record_save and ps_record_open follow the pane\'s rules: kept unsent si
     fake.holdPuts = null;
     release();
     assert.equal(json(await first).ref, 'ada/wave-two');
+
+    // signed in but PS.com out of reach: kept on this machine too
+    await fake.stop();
+    saved = json(await call(s.client, 'ps_record_save', { mode: 'new', name: 'away' }));
+    assert.deepEqual([saved.saved, saved.unsent, saved.reason], [false, 'away', OFFLINE]);
+    assert.match(saved.next, /unsent/);
+    assert.equal(s.hub.status().login.signedIn, true, 'offline, not signed out');
+    assert.deepEqual(s.hub.status().unsent.map((c) => c.name), ['away']);
+    assert.ok(keptCopy(s.hub, 'away').traces.length > 0);
   } finally { await s.close(); await fake.stop(); }
 });
 
@@ -286,5 +308,64 @@ test('a 60 s stream of 30 states a second with 16 joints goes in one call; a 6 M
       assert.match(String(e.message), /too large \(5 MB at most\)/);
       return true;
     });
+  } finally { await s.close(); }
+});
+
+test('each ps_stream_play takes the place of the agent\'s last attempt; append keeps both; ps_stream_clear empties the stream', async () => {
+  const s = await small();
+  try {
+    json(await call(s.client, 'ps_scene_place', { product: 'physical-sandbox/so101:1', xyz: [0, 0] }));
+    json(await call(s.client, 'ps_scene_place', { product: 'physical-sandbox/so101:1', xyz: [0.5, 0] }));
+    json(await call(s.client, 'ps_stream_play', { messages: wave(['so101-1']) }));
+    s.clock.advance(2000);
+    json(await call(s.client, 'ps_stream_play', { messages: wave(['so101-2']) }));
+    s.clock.advance(2000);
+    json(await call(s.client, 'ps_record_save', { mode: 'new', name: 'only-b' }));
+    assert.deepEqual(keptCopy(s.hub, 'only-b').traces.map((t: any) => t.deviceId), ['so101-2'], 'attempt A is gone');
+
+    json(await call(s.client, 'ps_stream_play', { messages: wave(['so101-1']), append: true }));
+    s.clock.advance(2000);
+    json(await call(s.client, 'ps_record_save', { mode: 'new', name: 'both' }));
+    assert.deepEqual(keptCopy(s.hub, 'both').traces.map((t: any) => [t.deviceId, t.samples.length]), [['so101-1', 31], ['so101-2', 31]]);
+
+    const cleared = json(await call(s.client, 'ps_stream_clear'));
+    assert.equal(cleared.status.recorded, 0);
+    assert.deepEqual(s.hub.streamBuffer(), []);
+  } finally { await s.close(); }
+});
+
+test('a stream played at speed 2 is saved at the times the agent wrote', async () => {
+  const s = await small();
+  try {
+    json(await call(s.client, 'ps_scene_place', { product: 'physical-sandbox/so101:1', xyz: [0, 0] }));
+    json(await call(s.client, 'ps_stream_play', { messages: wave(['so101-1']), speed: 2 }));
+    s.clock.advance(600);
+    assert.equal(s.hub.status().playing, null, 'played in half the time');
+    json(await call(s.client, 'ps_record_save', { mode: 'new', name: 'fast' }));
+    const times = keptCopy(s.hub, 'fast').traces[0].samples.map((x: any) => x.t);
+    assert.deepEqual(times, Array.from({ length: 31 }, (_, k) => Math.round(k * 33) / 1000));
+  } finally { await s.close(); }
+});
+
+test('a catalog object the agent listed, whose bundle.json cannot be fetched, is placed as a 0.2 m box, as from the pane', async () => {
+  const catalog = async (url: string) => {
+    const u = new URL(url);
+    const answer = (body: unknown, status = 200) => ({
+      ok: status === 200, status, json: async () => body,
+      arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(body)).buffer, headers: { get: () => null },
+    });
+    if (u.pathname === '/api/catalog/search') {
+      const kind = u.searchParams.get('kind');
+      return answer({ items: kind === 'object' ? [{ handle: 'maker', name: 'crate', latest_version: '1', display: { ja: '箱' }, kind }] : [] });
+    }
+    return answer({}, 404);
+  };
+  const s = await small({ catalogBase: 'https://ps.test', fetchImpl: catalog });
+  try {
+    assert.match(refusal(await call(s.client, 'ps_scene_place', { product: 'maker/crate:1', xyz: [1, 1] })), new RegExp(`^${WORDS.noProduct}`), 'not listed: found nowhere');
+    const listed = json(await call(s.client, 'ps_machines_list'));
+    assert.ok(listed.machines.some((m: any) => m.ref === 'maker/crate:1' && m.kind === 'object'), JSON.stringify(listed));
+    const placed = json(await call(s.client, 'ps_scene_place', { product: 'maker/crate:1', xyz: [1, 1] }));
+    assert.deepEqual([placed.device.type, placed.device.shape, placed.device.pose.xyz], ['item', { sizeM: [0.2, 0.2, 0.2] }, [1, 1, 0.1]]);
   } finally { await s.close(); }
 });

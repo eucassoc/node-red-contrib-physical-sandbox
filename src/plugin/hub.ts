@@ -58,19 +58,25 @@ export interface Status {
   full: boolean;
 }
 
-/** The agent's messages, sorted out: those the hub takes, those that are wrong (by index), another site's. */
+/**
+ * The agent's messages, sorted out: those the hub takes, those that are wrong (by index, with the
+ * reason), those for another site (by index), and the outside names of states that no device of
+ * the scene answers to (taken, but they move nothing a record keeps).
+ */
 export interface SortedMessages {
   messages: Message[];
   invalid: { index: number; reason: string }[];
-  skipped: { index: number; site: string }[];
+  otherSite: { index: number; site: string }[];
+  unknownNames: string[];
 }
 
-/** What playMessages played: how many and how long [s], and what it left out. */
+/** What playMessages played: how many and how long [s], and what it left out or could not place. */
 export interface AgentPlay {
   count: number;
   duration: number;
   invalid: { index: number; reason: string }[];
-  skipped: { index: number; site: string }[];
+  otherSite: { index: number; site: string }[];
+  unknownNames: string[];
 }
 
 export interface HubOptions {
@@ -114,13 +120,15 @@ export interface Hub {
   play(record: unknown, opts?: { loop?: boolean; speed?: number; source?: string }): { count: number; duration: number };
   /**
    * The agent's messages, checked one by one as `push` checks them (a state must also move
-   * something): what is wrong is answered by index with the reason, another site's are skipped,
+   * something): what is wrong is answered by index with the reason, another site's are left out,
    * and the rest are played to the panes in time from now, `from: 'agent'`, their `at` taken from
    * the first (smallest) one. A play under way stops first, unless nothing here can be played.
-   * The states are kept in the buffer as agent states, on the clock, once: a loop does not keep
-   * them again each round.
+   * The states are kept in the buffer as agent states once (a loop does not keep them again each
+   * round), at the times the agent wrote (from the start of the play, whatever the speed). Each
+   * play takes the place of the agent's states kept before (the live states and the opened
+   * record's stay; a record trace the last attempt had replaced comes back), unless `append`.
    */
-  playMessages(messages: unknown[], opts?: { loop?: boolean; speed?: number }): AgentPlay;
+  playMessages(messages: unknown[], opts?: { loop?: boolean; speed?: number; append?: boolean }): AgentPlay;
   /** The agent's messages sorted out as playMessages sorts them, without playing them. */
   sortMessages(messages: unknown[]): SortedMessages;
   stop(): void;
@@ -299,6 +307,10 @@ export function createHub(RED: any, opts: HubOptions): Hub {
   let live: Message[] = [];
   /** The devices (by deviceKey) that `loaded` has states of. */
   let loadedKeys = new Set<string>();
+  /** All the opened record's states as it was opened, the agent's kept states, and the devices whose loaded states an agent state dropped. */
+  let loadedAll: Message[] = [];
+  let agentKept = new WeakSet<Message>();
+  let droppedByAgent = new Set<string>();
   const recordedCount = () => loaded.length + live.length;
   let tickTimer: unknown = null;
   let lastTick = -Infinity;
@@ -353,9 +365,9 @@ export function createHub(RED: any, opts: HubOptions): Hub {
    * One message into the stream. `fromOutside`: a played state is noted for its echo only when it
    * came from outside (`ps play`, whose output may go to a broker); the pane's own playback never
    * leaves the hub. `keep: false`: a state that moves the panes but is kept already (an agent loop's
-   * later rounds).
+   * later rounds); `keepAt`: kept at this time instead of the one it was played at (the agent's own).
    */
-  function accept(raw: unknown, from: From, opts: { retained?: boolean; keep?: boolean }, fromOutside: boolean): boolean {
+  function accept(raw: unknown, from: From, opts: { retained?: boolean; keep?: boolean; keepAt?: number }, fromOutside: boolean): boolean {
     const message = validMessage(raw);
     if (!message) return false;
     const topic = parseTopic(message.topic)!;
@@ -365,7 +377,10 @@ export function createHub(RED: any, opts: HubOptions): Hub {
       const echo = from === 'mqtt' && isEcho(message);
       const type = isItemTopic(topic.id, message.payload) ? 'item' : 'mover';
       if (!applyState(store, { id: message.topic, type }, message.payload)) return false;
-      if (from !== 'record' && opts.retained !== true && opts.keep !== false && !echo) keep(message);
+      if (from !== 'record' && opts.retained !== true && opts.keep !== false && !echo) {
+        const at = opts.keepAt;
+        keep(at === undefined ? message : { ...message, payload: { ...message.payload, at }, at }, from);
+      }
     }
     publish(STATE_TOPIC, { ...message, from }, false);
     if (topic.kind === 'state') scheduleTick();
@@ -394,19 +409,44 @@ export function createHub(RED: any, opts: HubOptions): Hub {
   }
 
   /** A live or agent state into the buffer: the first one of a device drops that device's loaded states. */
-  function keep(message: Message): void {
+  function keep(message: Message, from: From): void {
     if (loadedKeys.size) {
       const key = deviceKey(message.topic);
-      if (loadedKeys.delete(key)) loaded = loaded.filter((m) => deviceKey(m.topic) !== key);
+      if (loadedKeys.delete(key)) {
+        loaded = loaded.filter((m) => deviceKey(m.topic) !== key);
+        if (from === 'agent') droppedByAgent.add(key);
+      }
     }
-    if (live.length < streamMax) live.push(message);
+    if (live.length < streamMax) {
+      live.push(message);
+      if (from === 'agent') agentKept.add(message);
+    }
+  }
+
+  /**
+   * The agent's kept states out of the buffer (before its next attempt): a device whose loaded
+   * states an agent state dropped, and that nothing live moves now, gets them back.
+   */
+  function dropAgentStates(): void {
+    live = live.filter((m) => !agentKept.has(m));
+    if (!droppedByAgent.size) return;
+    const moved = new Set(live.map((m) => deviceKey(m.topic)));
+    for (const key of droppedByAgent) {
+      if (moved.has(key)) continue;
+      loadedKeys.add(key);
+      droppedByAgent.delete(key);
+    }
+    loaded = loadedAll.filter((m) => loadedKeys.has(deviceKey(m.topic)));
   }
 
   /** An empty buffer and no latest states (an empty snapshot goes to the panes). */
   function emptyStream(): void {
     loaded = [];
+    loadedAll = [];
     live = [];
     loadedKeys = new Set();
+    agentKept = new WeakSet();
+    droppedByAgent = new Set();
     store.clear();
   }
 
@@ -467,34 +507,40 @@ export function createHub(RED: any, opts: HubOptions): Hub {
   }
 
   function sortMessages(raw: unknown[]): SortedMessages {
-    const sorted: SortedMessages = { messages: [], invalid: [], skipped: [] };
+    const sorted: SortedMessages = { messages: [], invalid: [], otherSite: [], unknownNames: [] };
     (Array.isArray(raw) ? raw : []).forEach((one, index) => {
       const checked = checkMessage(one);
       if ('problem' in checked) { sorted.invalid.push({ index, reason: checked.problem }); return; }
-      const { site } = parseTopic(checked.message.topic)!;
-      if (site !== scene.site) { sorted.skipped.push({ index, site }); return; }
+      const { site, id, kind } = parseTopic(checked.message.topic)!;
+      if (site !== scene.site) { sorted.otherSite.push({ index, site }); return; }
       const problem = stateProblem(checked.message);
       if (problem) { sorted.invalid.push({ index, reason: problem }); return; }
+      const deviceId = deviceIdOf(id);
+      const known = deviceId !== undefined && scene.devices.some((d) => d.id === deviceId);
+      if (kind === 'state' && !known && !sorted.unknownNames.includes(id)) sorted.unknownNames.push(id);
       sorted.messages.push(checked.message);
     });
     return sorted;
   }
 
-  function playMessages(raw: unknown[], o: { loop?: boolean; speed?: number } = {}): AgentPlay {
-    const { messages: taken, invalid, skipped } = sortMessages(raw);
-    if (!taken.length) return { count: 0, duration: 0, invalid, skipped };
+  function playMessages(raw: unknown[], o: { loop?: boolean; speed?: number; append?: boolean } = {}): AgentPlay {
+    const { messages: taken, invalid, otherSite, unknownNames } = sortMessages(raw);
+    if (!taken.length) return { count: 0, duration: 0, invalid, otherSite, unknownNames };
     // On the stream's own time from 0, in time order (stable: the agent's order at the same time)
     taken.sort((a, b) => a.at - b.at);
     const first = taken[0].at;
     const messages = taken.map((m) => ({ topic: m.topic, payload: { ...m.payload, at: m.at - first }, at: m.at - first }));
     stopRun();
+    if (o.append !== true) dropAgentStates();
     let round = 0;
+    // Kept at the times the agent wrote from the start of the play, not at the ones a speed made
+    const start = clock.now();
     const player = createPlayer({
       messages,
       clock,
       speed: o.speed,
       loop: o.loop === true,
-      onMessage: (m) => { accept(m, 'agent', { keep: round === 0 }, false); },
+      onMessage: (m, sent) => { accept(m, 'agent', { keep: round === 0, keepAt: start + messages[sent - 1].at }, false); },
       onRound: () => { round += 1; publishStatus(); },
       onEnd: () => {
         if (run?.player !== player) return;
@@ -505,7 +551,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     run = { player, source: 'agent' };
     publishStatus();
     player.start();
-    return { count: player.count, duration: player.duration, invalid, skipped };
+    return { count: player.count, duration: player.duration, invalid, otherSite, unknownNames };
   }
 
   // ---- the opened record, status ----
@@ -545,6 +591,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     // The record's states, on its own time, are the stream now: a save over it changes nothing
     // until something live comes in
     loaded = recordToMessages(record, { site: scene.site }).messages;
+    loadedAll = loaded;
     loadedKeys = new Set(loaded.map((m) => deviceKey(m.topic)));
     tick();
     publishStatus();

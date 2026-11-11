@@ -18,7 +18,8 @@ import type { Hub } from '../hub.js';
 // What the agent is told, to pass on to the person, who may read either language
 export const STREAM_WORDS = {
   nothingToPlay: '再生できるメッセージがありません / There is nothing to play',
-  leftOut: 'Some messages were left out: invalid ones (fix them by the reason) and other sites\' (the scene takes the site of its topic only)',
+  leftOut: 'Some messages were left out or move nothing: invalid ones (fix them by the reason), otherSite (the scene takes its own site only) '
+    + 'and unknownNames (no placed device answers to these names: place it with ps_scene_place, or use a device id)',
   unsent: 'Kept on this machine as unsent: it goes to PS.com when the person signs in or PS.com can be reached again (the pane shows it in red)',
 };
 
@@ -86,24 +87,29 @@ export function registerStreamTools(server: McpServer, hub: Hub, actions: Action
   server.registerTool('ps_stream_play', {
     description: 'Play state messages in the Physical Sandbox pane, from now, as the agent: each message ps/<site>/<id>/state with a payload whose at is '
       + 'in milliseconds; at counts from the first (smallest) one, so write at = 0, 33, 66, ... (30 a second is what a record keeps). '
+      + 'Give every device a state at the same first at: a record starts each device\'s trace at its own first state. '
       + 'The pane shows each when it falls due (speed 2 plays in half the time; loop goes round until ps_stream_stop or another play). '
       + 'A play under way stops first. Each message is checked as the pane checks one: invalid ones are answered by index with the reason and '
-      + 'left out, messages for another site than the scene\'s are skipped, and the rest play. The states are kept in the stream once '
-      + '(a loop does not keep them again), so ps_record_save saves them; over a record opened in the pane they take the place of the traces of '
-      + 'the devices they move. Answers count, duration [s], invalid, skipped and the status.',
+      + 'left out, otherSite lists those for another site than the scene\'s (left out), unknownNames the outside names no placed device answers '
+      + 'to (they move nothing a record keeps), and the rest play. The states are kept in the stream once (a loop does not keep them again), '
+      + 'at the times written (whatever the speed), so ps_record_save saves them. Each play takes the place of the states the last ps_stream_play '
+      + 'kept (a new attempt replaces the last one; live states from MQTT and the opened record stay); append: true keeps both. Over a record '
+      + 'opened in the pane they take the place of the traces of the devices they move. Answers count, duration [s], invalid, otherSite, '
+      + 'unknownNames and the status.',
     inputSchema: z.object({
       messages: MESSAGES,
       loop: z.boolean().optional().describe('Go round again at the end (default false).'),
-      speed: z.number().optional().describe('Playing speed, 0.1 to 10 (default 1).'),
+      speed: z.number().optional().describe('Playing speed, 0.1 to 10 (default 1); the times kept are the ones written.'),
+      append: z.boolean().optional().describe('Keep the states of the last ps_stream_play too, instead of replacing them (default false).'),
     }),
-  }, async ({ messages, loop, speed }) => {
-    const played = hub.playMessages(messages, { loop, speed });
+  }, async ({ messages, loop, speed, append }) => {
+    const played = hub.playMessages(messages, { loop, speed, append });
     if (played.count === 0) {
       const why = played.invalid.slice(0, 5).map((p) => `messages[${p.index}]: ${p.reason}`)
-        .concat(played.skipped.slice(0, 5).map((p) => `messages[${p.index}]: another site (${p.site}; the scene's is ${hub.scene().site})`));
+        .concat(played.otherSite.slice(0, 5).map((p) => `messages[${p.index}]: another site (${p.site}; the scene's is ${hub.scene().site})`));
       return failed(`${STREAM_WORDS.nothingToPlay}${why.length ? ` (${why.join('; ')})` : ''}`);
     }
-    const leftOut = played.invalid.length + played.skipped.length > 0;
+    const leftOut = played.invalid.length + played.otherSite.length + played.unknownNames.length > 0;
     return text({ ...played, ...(leftOut ? { next: STREAM_WORDS.leftOut } : {}), status: hub.status() });
   });
 
@@ -114,17 +120,28 @@ export function registerStreamTools(server: McpServer, hub: Hub, actions: Action
     return text({ status: hub.status() });
   });
 
+  server.registerTool('ps_stream_clear', {
+    description: 'Empty the stream, as the pane\'s 「記録を空にする」 does: every state kept (the agent\'s, the live ones and the opened record\'s) and '
+      + 'the latest states are let go, so a save starts from nothing. The scene and the opened record stay; a play under way goes on.',
+  }, async () => {
+    hub.clearStream();
+    return text({ status: hub.status() });
+  });
+
   server.registerTool('ps_record_inline', {
     description: 'State messages (as ps_stream_play takes them) turned into a record on the current scene (its devices, names and floor), '
       + 'ready to be put as the inline record of a ps play node (its record property, as JSON text or the object) in a proposed flow. '
-      + 'Nothing is played or kept. skipped lists the outside names no device of the scene answers to (their messages are left out); '
-      + 'invalid lists messages that are not ones by index with the reason. A record keeps at most 30 states a second per device, '
-      + 'to the millimetre, each device\'s trace from its own first state.',
+      + 'Nothing is played or kept. unknownNames lists the outside names no device of the scene answers to (their messages are left out); '
+      + 'otherSite the sites other than the scene\'s and how many messages were for them (left out); invalid the messages that are not ones, '
+      + 'by index with the reason. A record keeps at most 30 states a second per device, to the millimetre, each device\'s trace from its own '
+      + 'first state: give every device a state at the same first at.',
     inputSchema: z.object({ messages: MESSAGES }),
   }, async ({ messages }) => {
     const sorted = hub.sortMessages(messages);
     const { record, skipped } = messagesToRecord(hub.scene(), sorted.messages);
-    return text({ record, skipped, invalid: sorted.invalid, ...(sorted.skipped.length ? { otherSite: sorted.skipped } : {}) });
+    const otherSite = sorted.otherSite.length
+      ? { otherSite: { sites: [...new Set(sorted.otherSite.map((m) => m.site))], count: sorted.otherSite.length } } : {};
+    return text({ record, unknownNames: skipped, invalid: sorted.invalid, ...otherSite });
   });
 
   server.registerTool('ps_record_open', {
@@ -138,6 +155,7 @@ export function registerStreamTools(server: McpServer, hub: Hub, actions: Action
   server.registerTool('ps_record_save', {
     description: 'Save the stream as a record on PS.com, as the pane\'s 「新しい記録として保存」 and 「上書き保存」 do: mode new saves it under name (title is what people see), '
       + 'based on the record open in the pane if any; mode over saves it over the record open in the pane as its next version. '
+      + 'The stream holds the states of the last ps_stream_play (with append, the ones before it too) and the live ones; ps_stream_clear empties it. '
       + 'Over an opened record only the devices the stream moved since get new traces. Signed out or offline, it is kept on this machine '
       + '(saved false, unsent) and goes later; one save at a time. note says when it was saved under another name.',
     inputSchema: z.object({
