@@ -580,6 +580,7 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
         if (result.saved && hub.openedRecord() === opened) {
           hub.setOpened({ ref: result.ref, version: result.version, latest: result.version, own: true, record });
         }
+        if (result.saved) hub.noteSent(result.unsentSend?.sent);
         return { ...result, skipped };
       });
     } catch (e) {

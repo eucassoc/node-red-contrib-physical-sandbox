@@ -1033,3 +1033,26 @@ test('record/save answers the names no robot answers to, and the pane says them 
     assert.match(exportedText(exported.json), /^エクスポートしました: .*walk\.record\.json ghost はどのロボットの名前でもないため、記録に入れませんでした$/);
   } finally { await s.close(); }
 });
+
+test('a save over kept offline and sent later moves the opened record on: the next save over is the next version, not -2', async () => {
+  const fake = await new FakePsCom().start();
+  fake.seed('ada', 'walk', '1', walkRecord);
+  const s = await setup({ catalogBase: fake.base });
+  try {
+    await signedInWith(fake, s, 'walk');
+    s.hub.push({ topic: 'ps/local/arm/state', payload: { at: s.clock.now(), joints: { j: 5 } } }, 'mqtt');
+    const port = fake.port;
+    await fake.stop();
+    let r = await s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
+    assert.deepEqual([r.json.saved, r.json.unsent], [false, 'walk'], r.text);
+    await fake.start(port);
+    r = await s.call('POST', '/physical-sandbox/unsent/send');
+    assert.deepEqual(r.json.sent.map((c: any) => [c.ref, c.version, c.mode]), [['ada/walk', '2', 'over']]);
+    assert.deepEqual(s.red.retained('ps-pane/status').opened, { ref: 'ada/walk', version: '2', own: true });
+
+    s.hub.push({ topic: 'ps/local/arm/state', payload: { at: s.clock.now() + 1000, joints: { j: 6 } } }, 'mqtt');
+    r = await s.call('POST', '/physical-sandbox/record/save', { mode: 'over' });
+    assert.deepEqual([r.json.saved, r.json.ref, r.json.version, r.json.mode, r.json.note], [true, 'ada/walk', '3', 'over', undefined], r.text);
+    assert.equal(fake.items.has('ada/walk-2'), false);
+  } finally { await s.close(); await fake.stop(); }
+});

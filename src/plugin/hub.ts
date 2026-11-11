@@ -26,7 +26,7 @@ import { join } from 'node:path';
 import { applyState, decode, isTopicName, newStore, parseTopic } from '../pscom/state.js';
 import { recordToMessages, type Device, type Message, type Scene } from '../core/stream.js';
 import { PsComClient, tokenFileIn, type LoginStatus } from '../core/pscom-client.js';
-import { pending, sendAll, unsentDirIn, type SendAllResult, type Sender } from '../core/unsent.js';
+import { pending, sendAll, unsentDirIn, type SendAllResult, type Sender, type SentCopy } from '../core/unsent.js';
 import { isLocalMachine } from '../core/machines.js';
 import { createPlayer, realClock, type Clock, type Player } from '../core/player.js';
 import type { PluginSettings } from './settings.js';
@@ -119,6 +119,11 @@ export interface Hub {
   setAgentFrames(on: boolean): void;
   /** Send the kept copies (at start, after a login, on 再送信する), after any save under way (one at a time with saves). */
   sendUnsent(): Promise<SendAllResult>;
+  /**
+   * Kept copies that reached PS.com: one saved over the opened record makes its version the
+   * opened one (and the latest), so the next 上書き保存 goes on from it instead of being moved.
+   */
+  noteSent(sent: SentCopy[] | undefined): void;
   close(): void;
 }
 
@@ -499,11 +504,22 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     return throughGate(fn);
   }
 
+  function noteSent(sent: SentCopy[] | undefined): void {
+    if (!opened || !('ref' in opened)) return;
+    const ref = opened.ref;
+    const last = (sent ?? []).filter((c) => c.mode === 'over' && c.ref === ref).at(-1);
+    if (!last) return;
+    opened = { ...opened, version: last.version, latest: last.version };
+    publishStatus();
+  }
+
   async function sendUnsent(): Promise<SendAllResult> {
     while (gate) await gate;
     return throughGate(async () => {
       try {
-        return await sendAll(dirs.unsent, sender);
+        const result = await sendAll(dirs.unsent, sender);
+        noteSent(result.sent);
+        return result;
       } finally {
         refreshStatus();
       }
@@ -561,6 +577,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     floorIsKnown: () => openedFloor !== null && openedFloor === cornersKey(scene.floor),
     setAgentFrames: (on) => { agentFrames = on === true; publishStatus(); },
     sendUnsent,
+    noteSent,
     close,
   };
 }
