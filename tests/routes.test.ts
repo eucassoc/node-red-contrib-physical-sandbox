@@ -780,6 +780,8 @@ test('every sentence shown to people keeps the package\'s wording (no 直す・�
   for (const file of readdirSync(nodesDir).filter((f) => f.endsWith('.html'))) {
     for (const line of readFileSync(join(nodesDir, file), 'utf8').split('\n')) if (japanese.test(line)) sentences.push([`src/nodes/${file}`, line.trim()]);
   }
+  // and every Japanese line of README.ja.md
+  for (const line of readFileSync(join(import.meta.dirname, '..', 'README.ja.md'), 'utf8').split('\n')) if (japanese.test(line)) sentences.push(['README.ja.md', line.trim()]);
   assert.ok(sentences.length > 30, `${sentences.length} sentences found`);
   for (const [where, sentence] of sentences) assert.doesNotMatch(sentence.replaceAll('読み込', ''), banned, `${where}: ${sentence}`);
 });
