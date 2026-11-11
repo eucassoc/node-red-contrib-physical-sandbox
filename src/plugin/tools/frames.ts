@@ -124,7 +124,7 @@ export function registerFrameTools(server: McpServer, hub: Hub, link: EditorLink
       + 'with a text part giving each frame\'s time and size and the stream\'s duration [s] (its longest device trace). '
       + 'Only while the person has turned on 「エージェントに映像を渡す」 (Share frames with the agent) in the pane (off at every Node-RED start; see ps_status agentFrames); '
       + 'otherwise ask the person to turn it on. The pictures are given to this MCP client only and never sent to PS.com. '
-      + 'Needs the pane open in a browser (see ps_status panes). A video background is drawn as it shows now, not at the stream time. '
+      + 'Needs the pane open in a browser (see ps_status panes) and shown: a pane whose PS tab is not selected in the sidebar, or whose browser tab is in the background, refuses (ask the person to show it). A video background is drawn as it shows now, not at the stream time. '
       + 'The robots are drawn at the pane\'s size on screen and scaled to the picture: a narrow pane gives a blurrier robot.',
     inputSchema: z.object({ times: TIMES }),
   }, async ({ times }) => {

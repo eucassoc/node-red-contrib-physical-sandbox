@@ -231,3 +231,35 @@ test('when a request cannot go out at all the count is "unknown"', async () => {
     assert.equal(await s.link.presence(), 'unknown');
   } finally { await s.close(); }
 });
+
+test('frames: once every pane the last ping counted has refused, the last refusal comes at once; a pane giving frames still wins before that', async () => {
+  const s = await setup();
+  try {
+    const counting = s.link.presence();
+    const ping = s.requests()[0].data.id;
+    await s.answer({ id: ping, ok: true, result: { kind: 'pane', page: 'p1' } });
+    await s.answer({ id: ping, ok: true, result: { kind: 'pane', page: 'p2' } });
+    s.clock.advance(1000);
+    assert.deepEqual(await counting, { editors: 0, panes: 2 });
+
+    // two panes counted: one refusal waits, the second ends it with its words
+    let settled = false;
+    const refused = s.link.ask('frames', { frames: [{}] });
+    void refused.catch(() => undefined).finally(() => { settled = true; });
+    const id = s.requests()[1].data.id;
+    await s.answer({ id, ok: false, error: 'hidden' });
+    await Promise.resolve();
+    assert.equal(settled, false, 'the other pane may still give frames');
+    await s.answer({ id, ok: false, error: 'switch off' });
+    await assert.rejects(refused, (e: Error) => e instanceof EditorRefused && e.message === 'switch off');
+    assert.deepEqual(s.cancels(), [{ id }]);
+    assert.equal(s.clock.pending(), 0, 'no timer left behind');
+
+    // one refusal, then frames from the other pane: the frames win
+    const won = s.link.ask('frames', { frames: [{}] });
+    const next = s.requests()[2].data.id;
+    await s.answer({ id: next, ok: false, error: 'hidden' });
+    await s.answer({ id: next, ok: true, result: { frames: ['x'] } });
+    assert.deepEqual(await won, { frames: ['x'] });
+  } finally { await s.close(); }
+});

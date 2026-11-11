@@ -17,7 +17,7 @@ import { mountMcp, MCP_ROUTE } from '../src/plugin/mcp.js';
 import { registerRoutes } from '../src/plugin/routes.js';
 import { readSettings } from '../src/plugin/settings.js';
 import { FRAMES_WORDS } from '../src/plugin/tools/frames.js';
-import { createApi, createPaneAnswers, PANE_FRAMES_OFF, PANE_FRAMES_TOO_LARGE } from '../src/pane/comms-client.js';
+import { createApi, createPaneAnswers, PANE_FRAMES_HIDDEN, PANE_FRAMES_OFF, PANE_FRAMES_TOO_LARGE } from '../src/pane/comms-client.js';
 import { FRAME_MAX_BYTES, FRAME_MAX_SIDE, FRAMES_MAX, frameBudget } from '../src/core/frames.js';
 import { fakeClock, fakeRed } from './helpers/fake-red.js';
 import { jpegOf, pngOf, pngSize } from './helpers/png.js';
@@ -59,13 +59,14 @@ function onScene(s: Small, ids: string[]): void {
  * as a test PNG (or `png` bytes) and as a JPEG frame of that size (or `jpeg` bytes), noting what
  * it was asked to draw.
  */
-function openPane(s: Small, o: { allowed?: () => boolean; size?: [number, number]; png?: Buffer; jpeg?: Buffer } = {}) {
+function openPane(s: Small, o: { allowed?: () => boolean; shown?: () => boolean; size?: [number, number]; png?: Buffer; jpeg?: Buffer } = {}) {
   const api = createApi({ base: `${s.url}/`, token: () => null, fetchImpl: (u, i) => fetch(u, i) });
   const drawn: { states?: any[]; maxSide: number }[] = [];
   const answering: Promise<void>[] = [];
   const [width, height] = o.size ?? [640, 360];
   const answers = createPaneAnswers(api, 'page-1', {
     allowed: o.allowed ?? (() => true),
+    shown: o.shown ?? (() => true),
     picture(f) {
       drawn.push(f);
       return {
@@ -422,4 +423,26 @@ test('the agent sees ps_pane_frames with times (at most 6, seconds) in its schem
     assert.match(tool.description, /narrow pane gives a blurrier robot/);
     assert.match(tool.inputSchema.properties.times.description, /own first state, as a saved record keeps it/);
   } finally { await s.close(); }
+});
+
+test('a pane that is not shown refuses: alone (counted by ps_status), the agent is told at once to show the PS tab; beside a shown pane, the shown one gives the frames', async () => {
+  const s = await small({ framesTimeoutMs: 5000 });
+  try {
+    s.hub.setAgentFrames(true);
+    const hidden = openPane(s, { shown: () => false });
+    assert.equal(JSON.parse(given(await call(s.client, 'ps_status')).content[0].text).panes, 1);
+    const started = Date.now();
+    assert.equal(refusal(await call(s.client, 'ps_pane_frames')), PANE_FRAMES_HIDDEN);
+    assert.ok(Date.now() - started < 4000, 'every counted pane refused: not held until the time was up');
+    assert.equal(hidden.drawn.length, 0);
+  } finally { await s.close(); }
+
+  const t = await small({ framesTimeoutMs: 5000 });
+  try {
+    t.hub.setAgentFrames(true);
+    const panes = [openPane(t, { shown: () => false }), openPane(t)];
+    const answer = given(await call(t.client, 'ps_pane_frames'));
+    assert.equal(answer.content[1].mimeType, 'image/png');
+    await Promise.all(panes.flatMap((p) => p.answering));
+  } finally { await t.close(); }
 });

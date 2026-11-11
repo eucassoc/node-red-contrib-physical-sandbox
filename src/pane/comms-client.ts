@@ -202,6 +202,7 @@ export const PANE_FRAMES_OFF = 'この右ペインでは「エージェントに
 export const PANE_FRAMES_BAD = `右ペインに求める映像は 1 枚から ${FRAMES_MAX} 枚までです / A pane draws 1 to ${FRAMES_MAX} frames per request`;
 export const PANE_FRAMES_FAILED = 'この右ペインでは映像を作れませんでした / This pane could not draw the frame';
 export const PANE_FRAMES_TOO_LARGE = '映像が大きすぎて渡せませんでした / The frames were too large to hand over';
+export const PANE_FRAMES_HIDDEN = 'PS のタブを表示してください / Show the PS tab in the sidebar';
 
 /** One frame as the stage drew it: its size and its encodings (src/pane/stage.ts picture). */
 export interface DrawnFrame {
@@ -211,11 +212,14 @@ export interface DrawnFrame {
 }
 
 /**
- * What draws the pane's frames: whether its switch 「エージェントに映像を渡す」 shows on now, and the
- * stage's `picture()` (with the states of a stream time drawn on its own copy, or as it is).
+ * What draws the pane's frames: whether its switch 「エージェントに映像を渡す」 shows on now, whether
+ * the pane is shown (a sidebar tab not selected, or a browser tab in the background, has a canvas of
+ * no size and would hand over an empty picture), and the stage's `picture()` (with the states of a
+ * stream time drawn on its own copy, or as it is).
  */
 export interface FrameSource {
   allowed(): boolean;
+  shown(): boolean;
   picture(o: { states?: Json[]; maxSide: number }): DrawnFrame;
 }
 
@@ -245,11 +249,13 @@ type Outcome = { ok: true; result: Json } | { ok: false; error: string } | null;
  * The frames asked for (`args.frames: [{t?, states?}]`, the hub's states at each stream time; no
  * states: the stage as it is), drawn one after another while the switch shows on, each encoded
  * within its share of the bytes: `{frames: [{data, type, width, height}]}`, the words of a refusal,
- * or null when the request was cancelled meanwhile (nothing is posted then). The switch and the
- * cancel are looked at before each frame.
+ * or null when the request was cancelled meanwhile (nothing is posted then). The switch, whether the
+ * pane is shown and the cancel are looked at before each frame. A hidden pane's refusal is not the
+ * last word: the plugin waits on for a pane that is shown.
  */
 async function framesAnswer(args: unknown, source: FrameSource, cancelled: () => boolean): Promise<Outcome> {
   if (!source.allowed()) return { ok: false, error: PANE_FRAMES_OFF };
+  if (!source.shown()) return { ok: false, error: PANE_FRAMES_HIDDEN };
   const asked = (args as Json | null)?.frames;
   if (!Array.isArray(asked) || asked.length < 1 || asked.length > FRAMES_MAX) return { ok: false, error: PANE_FRAMES_BAD };
   const budget = frameBudget(asked.length);
@@ -257,6 +263,7 @@ async function framesAnswer(args: unknown, source: FrameSource, cancelled: () =>
   for (const one of asked) {
     if (cancelled()) return null;
     if (!source.allowed()) return { ok: false, error: PANE_FRAMES_OFF };
+    if (!source.shown()) return { ok: false, error: PANE_FRAMES_HIDDEN };
     const states = Array.isArray(one?.states) ? one.states : undefined;
     let encoded: FrameAnswer | null;
     try {

@@ -57,7 +57,8 @@
           if (RETAINED[topic]) held[topic] = data;
           post(topic, data);
         });
-        // The editor link's requests reach the pane too: it answers ping and frames (none is held)
+        // The editor link's requests reach the pane too: it answers ping and frames (none is held).
+        // While another sidebar tab is selected the iframe has no size, and the pane refuses frames
         RED.comms.subscribe('ps-editor/#', function (topic, data) { post(topic, data); });
         iframe.attr('src', PANE_URL);
       },

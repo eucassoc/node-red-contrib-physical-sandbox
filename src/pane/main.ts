@@ -212,6 +212,8 @@ const page = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 let sharesFrames = false;
 const answers = createPaneAnswers(api, page, {
   allowed: () => sharesFrames,
+  // Another sidebar tab selected (the iframe has no size) or the browser tab in the background
+  shown: () => canvas.clientWidth > 0 && canvas.clientHeight > 0 && document.visibilityState !== 'hidden',
   picture: (o) => stage.picture(o as { states?: { topic: string; payload: Json }[]; maxSide: number }),
 });
 

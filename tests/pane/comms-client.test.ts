@@ -1,7 +1,7 @@
 // How the pane hears the hub and talks to it (src/pane/comms-client.ts).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { adminRootOf, commsUrlOf, connectComms, createApi, createPaneAnswers, dispatch, listenToEditor, PaneError, PANE_FRAMES_BAD, PANE_FRAMES_FAILED, PANE_FRAMES_OFF, PANE_FRAMES_TOO_LARGE, tokenOf, type PaneHandlers } from '../../src/pane/comms-client.js';
+import { adminRootOf, commsUrlOf, connectComms, createApi, createPaneAnswers, dispatch, listenToEditor, PaneError, PANE_FRAMES_BAD, PANE_FRAMES_FAILED, PANE_FRAMES_HIDDEN, PANE_FRAMES_OFF, PANE_FRAMES_TOO_LARGE, tokenOf, type PaneHandlers } from '../../src/pane/comms-client.js';
 import { FRAME_MAX_BYTES, FRAME_MAX_SIDE, FRAMES_MAX, FRAMES_TOTAL_BYTES, frameBudget } from '../../src/core/frames.js';
 
 function recorder() {
@@ -48,13 +48,14 @@ test('a request on the editor link goes to the request handler, a cancel to the 
  * A stage for the pane's answer: its switch as `allowed` says; each frame is 640x360 and encodes
  * to `png` bytes as PNG and `jpeg` bytes as JPEG (any quality), noting each encoding asked for.
  */
-function frameSource(o: { allowed?: () => boolean; png?: number; jpeg?: number[]; fail?: boolean } = {}) {
+function frameSource(o: { allowed?: () => boolean; shown?: () => boolean; png?: number; jpeg?: number[]; fail?: boolean } = {}) {
   const drawn: any[] = [];
   const encodings: [string, number | undefined][] = [];
   return {
     drawn,
     encodings,
     allowed: o.allowed ?? (() => true),
+    shown: o.shown ?? (() => true),
     picture(f: any) {
       drawn.push(f);
       if (o.fail) throw new Error('no WebGL');
@@ -314,4 +315,20 @@ test('a refusal comes back as a PaneError with the hub\'s words and reason', asy
   const api = createApi({ base: '/red/', token: () => null, fetchImpl: async () => ({ ok: false, status: 409, json: async () => ({ error: '保存中です', reason: 'busy' }) }) });
   await assert.rejects(api.post('record/save', { mode: 'over' }), (e: unknown) => e instanceof PaneError && e.message === '保存中です' && e.reason === 'busy' && e.status === 409);
   assert.equal(api.url('scene'), '/red/physical-sandbox/scene');
+});
+
+test('a pane that is not shown (another sidebar tab, a background browser tab) refuses frames and draws nothing; hidden between two frames, it stops', async () => {
+  const { calls, api } = answering();
+  const hidden = frameSource({ shown: () => false });
+  await createPaneAnswers(api, 'page-1', hidden).request({ id: 'h', op: 'frames', args: { frames: [{}] } });
+  assert.equal(hidden.drawn.length, 0);
+  let left = 2; // looked at before the request and before each frame
+  const goesAway = frameSource({ shown: () => (left -= 1) >= 0 });
+  await createPaneAnswers(api, 'page-1', goesAway).request({ id: 'k', op: 'frames', args: { frames: [{}, {}] } });
+  assert.equal(goesAway.drawn.length, 1);
+  assert.deepEqual(calls.map(([, body]) => body), [
+    { id: 'h', ok: false, error: PANE_FRAMES_HIDDEN },
+    { id: 'k', ok: false, error: PANE_FRAMES_HIDDEN },
+  ]);
+  assert.match(PANE_FRAMES_HIDDEN, /^PS のタブを表示してください \/ Show the PS tab in the sidebar$/);
 });

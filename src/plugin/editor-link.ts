@@ -15,8 +15,9 @@
  * granted (with a ticket), the cancel goes out at that moment, and only the answer carrying the
  * ticket is taken; only a proposal can be claimed. For `frames` the first answer that gives the
  * frames wins: a pane that refuses (its switch shows off, the frames were too large) does not stop
- * another from answering, and its words are used only when no frames came in time (the last
- * refusal); pictures take longer, so `frames` waits `framesTimeoutMs` (10 s). A granted proposal
+ * another from answering, and its words are used only when no frames came (the last refusal): as
+ * soon as every pane the last ping counted has refused, else when the time is up; pictures take
+ * longer, so `frames` waits `framesTimeoutMs` (10 s) at most. A granted proposal
  * that is never answered is not "no editor" (the editor may well have imported it): it rejects with ProposalUnanswered, which
  * tells the agent to look at the editor before proposing again. A `ping` collects every answer for
  * a short time instead.
@@ -84,8 +85,9 @@ interface Pending {
   answers?: unknown[];
   /** The ticket of the granted claim. */
   ticket?: string;
-  /** The last refusal heard, for an op whose refusals wait for a better answer (`frames`). */
+  /** The last refusal heard, for an op whose refusals wait for a better answer (`frames`), and how many came. */
   refusal?: string;
+  refusals?: number;
 }
 
 /** The ops whose refusal does not end the request: another may still answer it. */
@@ -160,7 +162,10 @@ export function createEditorLink(RED: any, opts: {
     if (CLAIMED.has(p.op) && (!p.ticket || body.ticket !== p.ticket)) return { taken: false };
     if (PATIENT.has(p.op) && body.ok !== true) {
       p.refusal = refusalOf(body);
-      return { taken: true };
+      p.refusals = (p.refusals ?? 0) + 1;
+      // Every pane the last ping counted has refused: no frames are coming, so no need to wait on
+      const panes = counted && counted.value !== 'unknown' ? counted.value.panes : null;
+      if (panes === null || p.refusals < Math.max(1, panes)) return { taken: true };
     }
     finish(id, p);
     if (!p.ticket) cancel(id);
