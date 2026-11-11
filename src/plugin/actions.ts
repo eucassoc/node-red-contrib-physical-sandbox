@@ -56,13 +56,23 @@ export type PlainJa = (typeof PLAIN)[keyof typeof PLAIN]['ja'];
 export const WORDS = Object.fromEntries(Object.entries(PLAIN).map(([key, both]) => [key, both.ja])) as { [K in keyof typeof PLAIN]: (typeof PLAIN)[K]['ja'] };
 
 /**
- * PLAIN's words whose Japanese is `japanese`. A sentence that is not one of them has no English:
- * that is a mistake here (the types keep it from happening), never shown half translated.
+ * How a sentence with no English is met. Under the tests (`PS_STRICT_WORDS=1`, set by the npm
+ * scripts) it is an error, so a missing English fails a test. At run time the refusal stays the
+ * refusal it was (its status, error and reason): it is said in Japanese, and one warning names the
+ * sentence (the plugin sets `warn` to Node-RED's log).
  */
+export const untranslated = {
+  strict: process.env.PS_STRICT_WORDS === '1',
+  warn: (message: string): void => { console.warn(message); },
+};
+
+/** PLAIN's words whose Japanese is `japanese` (the types keep any other sentence out; see `untranslated`). */
 export function plainOf(japanese: string): Both {
   const both = Object.values(PLAIN).find((b) => b.ja === japanese);
-  if (!both) throw new TypeError(`no English for: ${japanese}`);
-  return both;
+  if (both) return both;
+  if (untranslated.strict) throw new TypeError(`no English for: ${japanese}`);
+  untranslated.warn(`physical-sandbox: no English for: ${japanese}`);
+  return { ja: japanese, en: japanese };
 }
 
 /** A catalog name (pscom-client.ts NAME). */

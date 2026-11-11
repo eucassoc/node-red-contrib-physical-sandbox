@@ -41,9 +41,9 @@
     "prepublishOnly": "npm run build",
     "typecheck": "tsc --noEmit",
     "pretest": "npm run build && npm run typecheck",
-    "test": "node --import tsx --test \"tests/**/*.test.{ts,js}\"",
+    "test": "PS_STRICT_WORDS=1 node --import tsx --test \"tests/**/*.test.{ts,js}\"",
     "pretest:nr5": "npm run build",
-    "test:nr5": "PS_NODE_RED=node-red-5 node --import tsx --test tests/smoke.test.ts tests/smoke-adminauth.test.ts",
+    "test:nr5": "PS_STRICT_WORDS=1 PS_NODE_RED=node-red-5 node --import tsx --test tests/smoke.test.ts tests/smoke-adminauth.test.ts",
     "start:dev": "npm run build && node tools/run-node-red.mjs"
   },
   "devDependencies": {

@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createHub, type Hub } from './hub.js';
 import { registerRoutes } from './routes.js';
-import { createActions } from './actions.js';
+import { createActions, untranslated } from './actions.js';
 import { createEditorLink } from './editor-link.js';
 import { mountMcp } from './mcp.js';
 import { readSettings, settingsOf } from './settings.js';
@@ -19,6 +19,8 @@ export default function physicalSandboxPlugin(RED: NodeAPI): void {
   const userDir: string = red.settings?.userDir || join(homedir(), '.node-red');
   const settings = readSettings(settingsOf(red), { userDir });
   const hub = createHub(red, { userDir, settings });
+  // A refusal whose sentence has no English is said in Japanese and noted in Node-RED's log
+  untranslated.warn = (message) => red.log?.warn?.(message);
   // This file is bundled to dist/plugin/index.js; the pane is built into dist/pane
   // One set of actions for the pane's routes and the agent's tools (the catalog cache, the robots listed)
   const actions = createActions(hub);

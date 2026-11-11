@@ -8,8 +8,8 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
-import { Answer, PLAIN } from '../src/plugin/actions.js';
-import { registerRoutes } from '../src/plugin/routes.js';
+import { Answer, PLAIN, untranslated } from '../src/plugin/actions.js';
+import { refuseTooLarge, registerRoutes } from '../src/plugin/routes.js';
 import { createHub } from '../src/plugin/hub.js';
 import { readSettings } from '../src/plugin/settings.js';
 import { createApi, PaneError } from '../src/pane/comms-client.js';
@@ -166,12 +166,32 @@ test('opening a PS.com item that is not a record is refused in the chosen langua
   } finally { await s.close(); await fake.stop(); }
 });
 
-test('an Answer takes words from PLAIN or given in both languages; a sentence with no English is refused', () => {
+test('an Answer takes words from PLAIN or given in both languages; under the tests a sentence with no English fails', () => {
+  assert.equal(untranslated.strict, true, 'the npm scripts set PS_STRICT_WORDS=1');
   assert.deepEqual(new Answer(409, PLAIN.busy.ja, 'busy').words, PLAIN.busy);
   const given = new Answer(400, { ja: 'ja 文', en: 'en text' }, 'x');
   assert.deepEqual([given.message, given.words.en], ['ja 文', 'en text']);
   // @ts-expect-error a sentence that is neither one of PLAIN's nor given with its English
   assert.throws(() => new Answer(400, 'どこにもない文', 'x'), /English/);
+});
+
+test('at run time a refusal whose sentence has no English keeps its status, error and reason, in Japanese, with one warning', () => {
+  const was = { ...untranslated };
+  const warned: string[] = [];
+  Object.assign(untranslated, { strict: false, warn: (m: string) => warned.push(m) });
+  try {
+    const answer = new Answer(409, 'どこにもない文' as any, 'busy');
+    assert.deepEqual([answer.status, answer.message, answer.reason, answer.words], [409, 'どこにもない文', 'busy', { ja: 'どこにもない文', en: 'どこにもない文' }]);
+    // and as a route answers it: a refusal of a body over the limit with such a sentence is still 413
+    let sent: { status: number; body: any } | null = null;
+    const req = { pause() {}, socket: null, destroy() {} };
+    const res = { on() {}, status(code: number) { return { json(body: unknown) { sent = { status: code, body }; } }; } };
+    refuseTooLarge(req, res, 'どこにもない大きさの文');
+    assert.equal(sent!.status, 413);
+    assert.deepEqual([sent!.body.error, sent!.body.reason], ['どこにもない大きさの文', 'too-large']);
+    assert.equal(warned.length, 2, 'one warning each');
+    assert.match(warned[0], /どこにもない文/);
+  } finally { Object.assign(untranslated, was); }
 });
 
 test('every sentence of the core has its Japanese and its English, with the same {names}', () => {
