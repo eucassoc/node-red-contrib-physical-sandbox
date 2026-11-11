@@ -369,3 +369,142 @@ test('a catalog object the agent listed, whose bundle.json cannot be fetched, is
     assert.deepEqual([placed.device.type, placed.device.shape, placed.device.pose.xyz], ['item', { sizeM: [0.2, 0.2, 0.2] }, [1, 1, 0.1]]);
   } finally { await s.close(); }
 });
+
+/** The joints of each device in one time's states (from hub.statesAt), by device id. */
+const jointsOf = (states: { topic: string; payload: any }[]) =>
+  Object.fromEntries(states.map((m) => [m.topic.split('/')[2], m.payload.joints]));
+/** One arm's adjustment: 31 states a second apart from the wave, so they cannot be mistaken for it. */
+const adjust = (id: string, base: number) => Array.from({ length: 31 }, (_, k) => ({
+  topic: `ps/local/${id}/state`, payload: { at: k * 33, joints: { shoulder_pan: Math.round((base + k / 100) * 1000) / 1000 } },
+}));
+const tracesOf = (record: any) => Object.fromEntries(record.traces.map((t: any) => [t.deviceId, t.samples]));
+
+/** Signed in to a fake PS.com, two arms placed. */
+async function signedIn() {
+  const fake = await new FakePsCom().start();
+  const s = await small({ catalogBase: fake.base });
+  await s.hub.client.loginStart();
+  assert.equal(await s.hub.client.loginPoll(), 'approved');
+  json(await call(s.client, 'ps_scene_place', { product: 'physical-sandbox/so101:1', xyz: [0, 0] }));
+  json(await call(s.client, 'ps_scene_place', { product: 'physical-sandbox/so101:1', xyz: [0.5, 0] }));
+  return { ...s, fake, async close() { await s.close(); await fake.stop(); } };
+}
+
+test('after a save the stream is the saved record: an adjustment of one arm shows both arms in frames, and a save over writes just that', { timeout: 20_000 }, async () => {
+  const s = await signedIn();
+  try {
+    json(await call(s.client, 'ps_stream_play', { messages: wave() }));
+    s.clock.advance(2000);
+    const take1 = json(await call(s.client, 'ps_record_save', { mode: 'new', name: 'take1' }));
+    assert.deepEqual([take1.saved, take1.ref, take1.version], [true, 'ada/take1', '1']);
+    assert.equal(s.hub.status().recorded, 62, 'the saved record\'s states');
+    const v1 = tracesOf(s.fake.record('ada', 'take1', '1'));
+
+    // the agent adjusts the second arm only
+    json(await call(s.client, 'ps_stream_play', { messages: adjust('so101-2', 1) }));
+    s.clock.advance(2000);
+    assert.equal(s.hub.status().recorded, 62, 'the first arm\'s 31 and the adjusted arm\'s 31');
+    const at = s.hub.statesAt([0, 0.5])!;
+    assert.deepEqual(at.states.map(jointsOf), [
+      { 'so101-1': { shoulder_pan: angle(0, 0), elbow_flex: angle(0, 1) }, 'so101-2': { shoulder_pan: 1 } },
+      { 'so101-1': { shoulder_pan: angle(15, 0), elbow_flex: angle(15, 1) }, 'so101-2': { shoulder_pan: 1.15 } },
+    ],
+    'both arms, the second as adjusted (its trace is the adjustment alone)');
+
+    const over = json(await call(s.client, 'ps_record_save', { mode: 'over' }));
+    assert.deepEqual([over.saved, over.ref, over.version], [true, 'ada/take1', '2']);
+    const v2 = tracesOf(s.fake.record('ada', 'take1', '2'));
+    assert.deepEqual(v2['so101-1'], v1['so101-1'], 'the other arm unchanged');
+    assert.deepEqual(v2['so101-2'].map((x: any) => x.joints.shoulder_pan), adjust('so101-2', 1).map((m) => m.payload.joints.shoulder_pan));
+    assert.deepEqual(s.hub.statesAt([0, 0.5])!.states, at.states, 'what the frames showed is what was saved');
+  } finally { await s.close(); }
+});
+
+test('open a record, play one arm, save over, play the other arm: the frames and the next save agree', { timeout: 20_000 }, async () => {
+  const s = await signedIn();
+  try {
+    json(await call(s.client, 'ps_stream_play', { messages: wave() }));
+    s.clock.advance(2000);
+    json(await call(s.client, 'ps_record_save', { mode: 'new', name: 'take1' }));
+    json(await call(s.client, 'ps_record_open', { ref: 'ada/take1' }));
+    s.clock.advance(2000);
+
+    json(await call(s.client, 'ps_stream_play', { messages: [{ topic: 'ps/local/so101-1/state', payload: { at: 0, joints: { shoulder_pan: 0.9 } } }] }));
+    s.clock.advance(100);
+    assert.equal(json(await call(s.client, 'ps_record_save', { mode: 'over' })).version, '2');
+    json(await call(s.client, 'ps_stream_play', { messages: [{ topic: 'ps/local/so101-2/state', payload: { at: 0, joints: { shoulder_pan: 0.7 } } }] }));
+    s.clock.advance(100);
+
+    const at = s.hub.statesAt([0.5])!;
+    assert.deepEqual(jointsOf(at.states[0]), { 'so101-1': { shoulder_pan: 0.9 }, 'so101-2': { shoulder_pan: 0.7 } }, 'the first arm as saved in version 2');
+    const v3 = json(await call(s.client, 'ps_record_save', { mode: 'over' }));
+    assert.equal(v3.version, '3');
+    const traces = tracesOf(s.fake.record('ada', 'take1', '3'));
+    assert.deepEqual(traces['so101-1'], [{ t: 0, joints: { shoulder_pan: 0.9 } }]);
+    assert.deepEqual(traces['so101-2'], [{ t: 0, joints: { shoulder_pan: 0.7 } }]);
+  } finally { await s.close(); }
+});
+
+test('ps_stream_clear starts fresh over an opened record: a save writes only what played after it; 上書き保存 is still the next version', { timeout: 20_000 }, async () => {
+  const s = await signedIn();
+  try {
+    json(await call(s.client, 'ps_stream_play', { messages: wave() }));
+    s.clock.advance(2000);
+    json(await call(s.client, 'ps_record_save', { mode: 'new', name: 'take1' }));
+    const cleared = json(await call(s.client, 'ps_stream_clear'));
+    assert.equal(cleared.status.recorded, 0);
+    assert.deepEqual(cleared.status.opened, { ref: 'ada/take1', version: '1', own: true }, 'the record stays open');
+    assert.equal(s.hub.statesAt([0]), null, 'nothing to show: a save would write no states');
+
+    json(await call(s.client, 'ps_stream_play', { messages: [{ topic: 'ps/local/so101-1/state', payload: { at: 0, joints: { shoulder_pan: 0.4 } } }] }));
+    s.clock.advance(100);
+    assert.deepEqual(jointsOf(s.hub.statesAt([0])!.states[0]), { 'so101-1': { shoulder_pan: 0.4 } });
+    const take2 = json(await call(s.client, 'ps_record_save', { mode: 'new', name: 'take2' }));
+    assert.equal(take2.saved, true);
+    assert.deepEqual(s.fake.record('ada', 'take2', '1').traces.map((t: any) => t.deviceId), ['so101-1'], 'only the arm played after the clear');
+
+    // over the record opened from PS.com: the next version of it, with only what played after the clear
+    json(await call(s.client, 'ps_record_open', { ref: 'ada/take1' }));
+    s.clock.advance(2000);
+    json(await call(s.client, 'ps_stream_clear'));
+    json(await call(s.client, 'ps_stream_play', { messages: [{ topic: 'ps/local/so101-2/state', payload: { at: 0, joints: { shoulder_pan: 0.3 } } }] }));
+    s.clock.advance(100);
+    const over = json(await call(s.client, 'ps_record_save', { mode: 'over' }));
+    assert.deepEqual([over.ref, over.version], ['ada/take1', '2']);
+    const v2 = s.fake.record('ada', 'take1', '2');
+    assert.deepEqual(v2.traces, [{ deviceId: 'so101-2', samples: [{ t: 0, joints: { shoulder_pan: 0.3 } }] }]);
+    assert.deepEqual(v2.equipment.devices.map((d: any) => d.id), ['so101-1', 'so101-2'], 'the record\'s devices stay');
+  } finally { await s.close(); }
+});
+
+test('ps_stream_clear stops the agent\'s looping play, so nothing more is shown or kept', async () => {
+  const s = await small();
+  try {
+    json(await call(s.client, 'ps_scene_place', { product: 'physical-sandbox/so101:1', xyz: [0, 0] }));
+    json(await call(s.client, 'ps_stream_play', { messages: wave(['so101-1']), loop: true }));
+    s.clock.advance(2500);
+    assert.equal(s.hub.status().playing?.source, 'agent');
+    const cleared = json(await call(s.client, 'ps_stream_clear'));
+    assert.equal(cleared.status.playing, null, 'the loop stopped');
+    const heard = s.red.published.length;
+    s.clock.advance(3000);
+    assert.equal(s.red.published.filter((p, i) => i >= heard && p.topic === 'ps-pane/state').length, 0);
+    assert.equal(s.hub.status().recorded, 0);
+  } finally { await s.close(); }
+});
+
+test('a play at speed 10 then one appended: the appended states are kept after the last kept one, none lost', async () => {
+  const s = await small();
+  try {
+    json(await call(s.client, 'ps_scene_place', { product: 'physical-sandbox/so101:1', xyz: [0, 0] }));
+    json(await call(s.client, 'ps_stream_play', { messages: wave(['so101-1']), speed: 10 }));
+    s.clock.advance(200);
+    json(await call(s.client, 'ps_stream_play', { messages: wave(['so101-1']), append: true }));
+    s.clock.advance(2000);
+    json(await call(s.client, 'ps_record_save', { mode: 'new', name: 'twice' }));
+    const times = keptCopy(s.hub, 'twice').traces[0].samples.map((x: any) => x.t);
+    assert.equal(times.length, 62, 'every sample of both attempts');
+    assert.ok(times.every((t: number, i: number) => i === 0 || t > times[i - 1]), 'in time order, no overlap');
+    assert.deepEqual(times.slice(29, 33), [0.957, 0.99, 1.024, 1.057]);
+  } finally { await s.close(); }
+});

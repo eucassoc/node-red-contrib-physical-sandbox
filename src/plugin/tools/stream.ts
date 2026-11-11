@@ -121,12 +121,10 @@ export function registerStreamTools(server: McpServer, hub: Hub, actions: Action
   });
 
   server.registerTool('ps_stream_clear', {
-    description: 'Empty the stream, as the pane\'s 「記録を空にする」 does: every state kept (the agent\'s, the live ones and the opened record\'s) and '
-      + 'the latest states are let go, so a save starts from nothing. The scene and the opened record stay; a play under way goes on.',
-  }, async () => {
-    hub.clearStream();
-    return text({ status: hub.status() });
-  });
+    description: 'Empty the stream, as the pane\'s 「記録を空にする」 does: every state kept (the agent\'s, the live ones and the opened record\'s '
+      + 'traces) and the latest states are let go, and a play of the agent under way stops. A save afterwards writes only what plays after the clear: '
+      + 'the record stays open, so mode over still saves its next version (same name), with only those traces. The scene stays.',
+  }, async () => text(actions.clear()));
 
   server.registerTool('ps_record_inline', {
     description: 'State messages (as ps_stream_play takes them) turned into a record on the current scene (its devices, names and floor), '
@@ -156,7 +154,8 @@ export function registerStreamTools(server: McpServer, hub: Hub, actions: Action
     description: 'Save the stream as a record on PS.com, as the pane\'s 「新しい記録として保存」 and 「上書き保存」 do: mode new saves it under name (title is what people see), '
       + 'based on the record open in the pane if any; mode over saves it over the record open in the pane as its next version. '
       + 'The stream holds the states of the last ps_stream_play (with append, the ones before it too) and the live ones; ps_stream_clear empties it. '
-      + 'Over an opened record only the devices the stream moved since get new traces. Signed out or offline, it is kept on this machine '
+      + 'Over an opened record only the devices the stream moved since get new traces. Once saved, the saved record is the open one: the next '
+      + 'ps_stream_play adjusts it (mode over writes the next version). Signed out or offline, it is kept on this machine '
       + '(saved false, unsent) and goes later; one save at a time. note says when it was saved under another name.',
     inputSchema: z.object({
       mode: z.enum(['new', 'over']),

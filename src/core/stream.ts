@@ -330,7 +330,7 @@ export function mergeStreamInto(baseRecord: Json, scene: Scene, messages: Messag
  * the catalog, so the catalog ref (`physical-sandbox/mybot:1`) that PS.com's readers mend it into
  * would point somewhere else.
  */
-function asVersion3(record: Json): Json {
+export function asVersion3(record: Json): Json {
   if (!isObject(record)) return record;
   if (typeof record.schemaVersion === 'number' && record.schemaVersion >= SCHEMA_VERSION) return record;
   const written = new Map<string, Json>();

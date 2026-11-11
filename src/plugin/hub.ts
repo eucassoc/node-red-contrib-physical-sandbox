@@ -6,10 +6,13 @@
  * - The stream: every message that comes in (`push`, from `ps in`, a record being played, or the
  *   agent's `playMessages`) is checked as PS.com's devices/state.js checks a broker's (rubbish until it proves
  *   otherwise, an older `at` never wins) and sent to every pane. A message for another site than
- *   the scene's moves nothing, as in the pane: it is not sent, counted, kept or saved. The stream buffer, what a save
- *   turns into a record, is the opened record's states on the record's own time (loaded when it is
- *   opened) and the live (`mqtt`) and `agent` states on their own `at`; a live state for a device
- *   takes the place of that device's loaded states. What a play sends (`record`) is never kept: the
+ *   the scene's moves nothing, as in the pane: it is not sent, counted, kept or saved. The stream buffer
+ *   is the opened record's states on the record's own time (loaded when it is opened, and the saved
+ *   record's after a save) and the live (`mqtt`) and `agent` states on their own `at`; a live state
+ *   for a device takes the place of that device's loaded states. One function, `recordNow`, says
+ *   what a save would write from it: the save, the frames (`statesAt`) and the export all use it.
+ *   Emptying the stream (「記録を空にする」, another site) lets the opened record's traces go too: a
+ *   save then writes only what came in after. What a play sends (`record`) is never kept: the
  *   record is in the buffer already, so half a play, a faster one or a loop leave it as it was.
  *   Nor is its echo: a live state with the topic and `at` of a state `ps play` played in the last
  *   30 s (`ps play` → `mqtt out` → broker → `mqtt in` → `ps in`) moves the panes but is not kept.
@@ -24,7 +27,9 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { applyState, decode, isTopicName, newStore, parseTopic } from '../pscom/state.js';
-import { messagesToRecord, recordToMessages, type Device, type Message, type Scene } from '../core/stream.js';
+import {
+  asVersion3, DEVICE_TRACE_MIN_GAP_MS, mergeStreamInto, messagesToRecord, recordToMessages, type Device, type Message, type Scene,
+} from '../core/stream.js';
 import { PsComClient, tokenFileIn, type LoginStatus } from '../core/pscom-client.js';
 import { pending, sendAll, unsentDirIn, type SendAllResult, type Sender, type SentCopy } from '../core/unsent.js';
 import { isLocalMachine } from '../core/machines.js';
@@ -48,7 +53,7 @@ export interface Status {
   unsent: { name: string; ref: string; mode: 'new' | 'over' }[];
   playing: { source: string; t: number; duration: number } | null;
   agentFrames: boolean;
-  /** How many state messages the stream buffer holds (what a save would write). */
+  /** How many state messages the stream buffer holds: the ones recordNow writes (before its 30/s thinning). */
   recorded: number;
   /** The opened record, without its content; `own` says whether it can be saved over. */
   opened: { ref: string; version: string; own: boolean } | { file: string } | null;
@@ -126,13 +131,14 @@ export interface Hub {
    * The states are kept in the buffer as agent states once (a loop does not keep them again each
    * round), at the times the agent wrote (from the start of the play, whatever the speed). Each
    * play takes the place of the agent's states kept before (the live states and the opened
-   * record's stay; a record trace the last attempt had replaced comes back), unless `append`.
+   * record's stay; a record trace the last attempt had replaced comes back), unless `append`: then
+   * its states are kept after the agent's last kept one (a play at speed 10 runs ahead of the clock).
    */
   playMessages(messages: unknown[], opts?: { loop?: boolean; speed?: number; append?: boolean }): AgentPlay;
   /** The agent's messages sorted out as playMessages sorts them, without playing them. */
   sortMessages(messages: unknown[]): SortedMessages;
   stop(): void;
-  /** What a save writes: the opened record's states (on its time), then the live and agent ones. */
+  /** The stream buffer: the opened record's states (on its time), then the live and agent ones. */
   streamBuffer(): Message[];
   /**
    * The live and agent states only (what came in since the opened record was opened): over an
@@ -140,13 +146,27 @@ export interface Hub {
    */
   liveBuffer(): Message[];
   /**
-   * What the stream, saved now as a record, replays at each of `times` [s]: for each time, the
+   * The record a save would write now: with no record open, the stream as a new record; over the
+   * opened record (as last saved, opened, or emptied by a clear), the record with the traces of the
+   * devices the live and agent states move replaced by theirs, every other trace exactly as it has
+   * it (re-deriving them would thin a 50/s trace, round its values and drop fields this package does
+   * not know). `title` names it; `basedOn` notes the opened PS.com record it came from. `skipped`:
+   * the outside names of live and agent states that no device answers to.
+   */
+  recordNow(opts?: { title?: string; basedOn?: boolean }): { record: Json; skipped: string[] };
+  /**
+   * What recordNow's record replays at each of `times` [s]: for each time, the
    * latest state of every device, built up as a pane builds it (a mover's joints and place add up),
    * as the snapshot gives them; and how long it is [s] (its longest trace). Each device counts from
    * its own first state, as a saved record keeps it. Null when it has no state of a device.
    */
   statesAt(times: number[]): { states: Message[][]; duration: number } | null;
-  /** Empty the stream buffer and forget the latest states (an empty snapshot goes to the panes). */
+  /**
+   * 「記録を空にする」: empty the stream buffer and forget the latest states (an empty snapshot goes
+   * to the panes); the agent's play under way stops. The opened record stays open, but its traces are
+   * let go: a save afterwards writes only what plays after this, and 上書き保存 still makes the
+   * opened record's next version.
+   */
   clearStream(): void;
   status(): Status;
   /** Send the status as it is held (the unsent list and the login as last read). */
@@ -158,8 +178,12 @@ export interface Hub {
   /** Open a record: its scene (keeping the background), its states as the stream, and it is the opened record. */
   open(record: Json, opened: Opened): Scene;
   openedRecord(): Opened | null;
-  /** The opened record after a save (the scene and the stream stay as they are). */
-  setOpened(opened: Opened | null): void;
+  /**
+   * A save reached PS.com: the saved record is the opened one, and the stream is re-based on it (its
+   * states are the loaded ones; the live and agent states are in it now). The scene and the latest
+   * states stay, so the panes do not move.
+   */
+  rebase(saved: Opened): void;
   /** Whether the scene's floor is the opened record's: the corners must then be clicked in its order. */
   floorIsKnown(): boolean;
   setAgentFrames(on: boolean): void;
@@ -318,6 +342,8 @@ export function createHub(RED: any, opts: HubOptions): Hub {
   let loadedAll: Message[] = [];
   let agentKept = new WeakSet<Message>();
   let droppedByAgent = new Set<string>();
+  /** The record a save goes over: the opened one, the saved one after a save, with no traces after a clear. */
+  let base: Json | null = null;
   const recordedCount = () => loaded.length + live.length;
   let tickTimer: unknown = null;
   let lastTick = -Infinity;
@@ -446,10 +472,17 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     loaded = loadedAll.filter((m) => loadedKeys.has(deviceKey(m.topic)));
   }
 
+  function recordNow(o: { title?: string; basedOn?: boolean } = {}): { record: Json; skipped: string[] } {
+    if (!opened || !base) return messagesToRecord(scene, [...loaded, ...live], { title: o.title });
+    const record = mergeStreamInto(base, scene, live);
+    if (o.title) record.name = o.title;
+    if (o.basedOn && 'ref' in opened) record.basedOn = `${opened.ref}:${opened.version}`;
+    return { record, skipped: messagesToRecord(scene, live).skipped };
+  }
+
   function statesAt(times: number[]): { states: Message[][]; duration: number } | null {
-    // The save's own timeline: the buffer as a record, then that record's states (time order, from 0)
-    const { record } = messagesToRecord(scene, [...loaded, ...live]);
-    const all = recordToMessages(record, { site: scene.site }).messages;
+    // The save's own timeline: the record a save would write, then its states (time order, from 0)
+    const all = recordToMessages(recordNow().record, { site: scene.site }).messages;
     if (!all.length) return null;
     const states: Message[][] = new Array(times.length);
     const at = newStore();
@@ -465,8 +498,9 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     return { states, duration: all[all.length - 1].at / 1000 };
   }
 
-  /** An empty buffer and no latest states (an empty snapshot goes to the panes). */
+  /** An empty buffer and no latest states (an empty snapshot goes to the panes); the opened record's traces go too. */
   function emptyStream(): void {
+    if (base) base = { ...asVersion3(base), traces: [] };
     loaded = [];
     loadedAll = [];
     live = [];
@@ -477,6 +511,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
   }
 
   function clearStream(): void {
+    if (run?.source === 'agent') stopRun();
     emptyStream();
     tick();
     publishStatus();
@@ -559,8 +594,13 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     stopRun();
     if (o.append !== true) dropAgentStates();
     let round = 0;
-    // Kept at the times the agent wrote from the start of the play, not at the ones a speed made
-    const start = clock.now();
+    // Kept at the times the agent wrote from the start of the play, not at the ones a speed made;
+    // an appended attempt after the last kept one (one 30/s gap on), so the two never overlap
+    let start = clock.now();
+    if (o.append === true) {
+      const last = live.reduce((m, s) => (agentKept.has(s) && s.at > m ? s.at : m), -Infinity);
+      if (last > -Infinity) start = Math.max(start, last + Math.ceil(DEVICE_TRACE_MIN_GAP_MS));
+    }
     const player = createPlayer({
       messages,
       clock,
@@ -613,6 +653,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     opened = source;
     openedFloor = cornersKey(from.floor);
     emptyStream();
+    base = record;
     const shown = replaceScene(next);
     // The record's states, on its own time, are the stream now: a save over it changes nothing
     // until something live comes in
@@ -622,6 +663,18 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     tick();
     publishStatus();
     return shown;
+  }
+
+  function rebase(saved: Opened): void {
+    opened = saved;
+    base = saved.record;
+    loaded = recordToMessages(saved.record, { site: scene.site }).messages;
+    loadedAll = loaded;
+    loadedKeys = new Set(loaded.map((m) => deviceKey(m.topic)));
+    live = [];
+    agentKept = new WeakSet();
+    droppedByAgent = new Set();
+    publishStatus();
   }
 
   function status(): Status {
@@ -740,6 +793,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     stop,
     streamBuffer: () => plain([...loaded, ...live]),
     liveBuffer: () => plain(live),
+    recordNow,
     statesAt,
     clearStream,
     status,
@@ -748,7 +802,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     exclusiveSave,
     open,
     openedRecord: () => opened,
-    setOpened: (next) => { opened = next; publishStatus(); },
+    rebase,
     floorIsKnown: () => openedFloor !== null && openedFloor === cornersKey(scene.floor),
     setAgentFrames: (on) => { agentFrames = on === true; publishStatus(); },
     sendUnsent,

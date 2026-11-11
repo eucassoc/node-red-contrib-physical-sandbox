@@ -363,6 +363,9 @@ test('stream/play opens a record (sent, or from PS.com) and plays it to the pane
     assert.equal(s.hub.streamBuffer().length, 2, 'the opened record\'s states, however much was played');
     r = await s.call('POST', '/physical-sandbox/stream/clear');
     assert.equal(r.json.status.recorded, 0);
+    r = await s.call('POST', '/physical-sandbox/record/export', { name: 'after-clear' });
+    const exported = JSON.parse(readFileSync(r.json.file, 'utf8'));
+    assert.deepEqual([exported.traces, exported.equipment.devices.map((d: any) => d.id)], [[], ['arm']], '記録を空にする lets the opened record\'s traces go: a save writes only what comes after');
 
     assert.equal((await s.call('POST', '/physical-sandbox/stream/play', { ref: 'ada/none' })).status, 404);
     assert.equal((await s.call('POST', '/physical-sandbox/stream/play', {})).status, 400);
@@ -951,7 +954,7 @@ test('a live state for one device of an opened record replaces that device\'s tr
   } finally { await s.close(); await fake.stop(); }
 });
 
-test('stream/play {replay: true} plays the opened record from the hub\'s copy: no PS.com, the live recording and the opened record stay', async () => {
+test('stream/play {replay: true} plays the opened record from the hub\'s copy: no PS.com, the stream and the opened record stay', async () => {
   const fake = await new FakePsCom().start();
   fake.seed('ada', 'walk', '1', walkRecord);
   const s = await setup({ catalogBase: fake.base });
@@ -972,7 +975,9 @@ test('stream/play {replay: true} plays the opened record from the hub\'s copy: n
     assert.deepEqual([r.json.source, r.json.count], ['ada/walk-live:1', 1]);
     assert.equal(fake.calls.length, asked, 'PS.com is not asked (it is out of reach)');
     assert.deepEqual(s.red.retained('ps-pane/status').opened, { ref: 'ada/walk-live', version: '1', own: true }, 'still the record saved as new');
-    assert.equal(s.hub.liveBuffer().length, 1, 'the live recording stays');
+    // After the save the stream is re-based on the saved record: the live state is one of its states now
+    assert.deepEqual(s.hub.streamBuffer().map((m) => (m.payload as any).joints), [{ j: 5 }], 'the stream stays as saved');
+    assert.equal(s.hub.liveBuffer().length, 0, 'nothing live since the save');
     assert.equal(s.red.published.filter((p) => p.topic === 'ps-pane/state').at(-1)?.data.from, 'record');
 
     // a file's record plays again the same way

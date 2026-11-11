@@ -11,11 +11,11 @@
  */
 import { deviceStem, parseRef } from '../pscom/catalog-client.js';
 import { isTopicName } from '../pscom/state.js';
-import { messagesToRecord, mergeStreamInto, type Device } from '../core/stream.js';
+import type { Device } from '../core/stream.js';
 import { defaultCacheRoot, readBundleJson, type MachineRow } from '../core/machines.js';
 import { Offline, Refused, SignIn, Taken } from '../core/pscom-client.js';
 import { save, type SaveResult } from '../core/unsent.js';
-import { Busy, type Hub, type Opened, type Status } from './hub.js';
+import { Busy, type Hub, type Status } from './hub.js';
 
 type Json = Record<string, any>;
 type FetchLike = (url: string, init?: any) => Promise<any>;
@@ -127,15 +127,13 @@ export interface Actions {
    * opened one again from the hub's copy), with `loop` and `speed`.
    */
   play(body: Json): Promise<{ source: string; count: number; duration: number; status: Status }>;
-  /** Save the stream (`{mode: 'new'|'over', name?, title?}`): one save at a time, kept when PS.com cannot be reached. */
-  save(body: Json): Promise<SaveResult & { skipped: string[] }>;
   /**
-   * What a save writes: over the opened record, else the stream as a new record. Over the opened
-   * record only the live and agent states change anything (the devices they are of get their traces
-   * replaced): the record's own states are in the stream on its own time, and re-deriving them would
-   * thin a 50/s trace, round its values and drop fields this package does not know.
+   * Save the stream (`{mode: 'new'|'over', name?, title?}`) as hub.recordNow writes it: one save at a
+   * time, kept when PS.com cannot be reached. Saved, it is the opened record and the stream is re-based on it.
    */
-  recordToSave(opened: Opened | null, title: string | undefined, basedOn: boolean): { record: Json; skipped: string[] };
+  save(body: Json): Promise<SaveResult & { skipped: string[] }>;
+  /** 「記録を空にする」 (the pane's button and ps_stream_clear): hub.clearStream. */
+  clear(): { status: Status };
 }
 
 export function createActions(hub: Hub, opts: ActionOptions = {}): Actions {
@@ -273,16 +271,6 @@ export function createActions(hub: Hub, opts: ActionOptions = {}): Actions {
     return { source, ...result, status: hub.status() };
   }
 
-  function recordToSave(opened: Opened | null, title: string | undefined, basedOn: boolean): { record: Json; skipped: string[] } {
-    const scene = hub.scene();
-    if (!opened) return messagesToRecord(scene, hub.streamBuffer(), { title });
-    const live = hub.liveBuffer();
-    const record = mergeStreamInto(opened.record, scene, live);
-    if (title) record.name = title;
-    if (basedOn && 'ref' in opened) record.basedOn = `${opened.ref}:${opened.version}`;
-    return { record, skipped: messagesToRecord(scene, live).skipped };
-  }
-
   async function saveStream(body: Json): Promise<SaveResult & { skipped: string[] }> {
     const { mode, name, title } = body;
     const words = typeof title === 'string' && title.trim() ? title.trim() : undefined;
@@ -300,7 +288,7 @@ export function createActions(hub: Hub, opts: ActionOptions = {}): Actions {
           if (!opened || !('ref' in opened) || !opened.own) throw new Answer(409, WORDS.notOwn, 'not-own');
           target = { ref: opened.ref, mode: 'over', base: opened.latest };
         }
-        const { record, skipped } = recordToSave(opened, words, mode === 'new');
+        const { record, skipped } = hub.recordNow({ title: words, basedOn: mode === 'new' });
         let result;
         try {
           result = await save(hub.dirs.unsent, hub.sender, record, target);
@@ -311,9 +299,10 @@ export function createActions(hub: Hub, opts: ActionOptions = {}): Actions {
         } finally {
           hub.refreshStatus();
         }
-        // The saved record is the opened one, unless another was opened while this one was saved
+        // The saved record is the opened one and the stream is re-based on it, unless another was
+        // opened while this one was saved
         if (result.saved && hub.openedRecord() === opened) {
-          hub.setOpened({ ref: result.ref, version: result.version, latest: result.version, own: true, record });
+          hub.rebase({ ref: result.ref, version: result.version, latest: result.version, own: true, record });
         }
         if (result.saved) hub.noteSent(result.unsentSend?.sent);
         return { ...result, skipped };
@@ -334,6 +323,6 @@ export function createActions(hub: Hub, opts: ActionOptions = {}): Actions {
     setSite,
     play,
     save: saveStream,
-    recordToSave,
+    clear: () => { hub.clearStream(); return { status: hub.status() }; },
   };
 }

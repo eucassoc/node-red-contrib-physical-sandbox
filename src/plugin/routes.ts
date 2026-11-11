@@ -342,7 +342,7 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
   app.post(`${P}/stream/play`, write, jsonBody, handle(async (req, res) => { res.json(await actions.play(req.body)); }));
 
   app.post(`${P}/stream/stop`, write, handle((req, res) => { hub.stop(); res.json({ status: hub.status() }); }));
-  app.post(`${P}/stream/clear`, write, handle((req, res) => { hub.clearStream(); res.json({ status: hub.status() }); }));
+  app.post(`${P}/stream/clear`, write, handle((req, res) => { res.json(actions.clear()); }));
 
   // ---- saving ----
 
@@ -352,7 +352,7 @@ export function registerRoutes(RED: any, hub: Hub, opts: RouteOptions): void {
     const { name, title } = req.body;
     const stem = typeof name === 'string' && NAME.test(name) ? name : 'record';
     const words = typeof title === 'string' && title.trim() ? title.trim() : undefined;
-    const { record, skipped } = actions.recordToSave(hub.openedRecord(), words, false);
+    const { record, skipped } = hub.recordNow({ title: words });
     mkdirSync(hub.dirs.exports, { recursive: true });
     const text = JSON.stringify(record, null, 1) + '\n';
     for (let k = 1; k < 1000; k += 1) {
