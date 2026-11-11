@@ -43,7 +43,7 @@ another screen. Both show the same scene and the same stream, so you can use eit
 - **Saving.** 「上書き保存」 (Save) makes the next version of the record you opened. 「新しい記録として保存」
   (Save as a new record) makes a new record under a name you give. Versions are never written over.
   「エクスポート」 (Export) writes a record file to `<userDir>/physical-sandbox/exports/`.
-- **The agent switch.** 「エージェントに映像を渡す」 is off and does nothing yet; it is for a later version.
+- **The agent switch.** 「エージェントに映像を渡す」 is off by default and off again after a restart. While it is on, an agent connected through `ps-nodered-mcp` can ask for the pane's pictures (see "Claude Desktop" below).
 
 ## `ps in`: from MQTT into the pane
 
@@ -105,22 +105,49 @@ computer has, or belongs to another account) can be taken away with 「取り除
 
 ## Claude Desktop
 
-`ps-nodered-mcp` lets Claude Desktop use the agent tools of the Node-RED running on this computer. Add this to Claude Desktop's configuration (`claude_desktop_config.json`) and restart it:
+`ps-nodered-mcp` lets Claude Desktop (or any MCP client that starts a command) use the agent tools of the Node-RED running on this computer.
+
+### Connecting Claude Desktop
+
+Add this to Claude Desktop's configuration (`claude_desktop_config.json`) and restart it:
 
 ```json
 {"mcpServers": {"node-red-physical-sandbox": {"command": "npx", "args": ["-y", "-p", "node-red-contrib-physical-sandbox", "ps-nodered-mcp"]}}}
 ```
 
+(If the package is installed, `"command"` can be the path of the `ps-nodered-mcp` bin instead.) Node-RED must be running with this package installed, and the Node-RED editor open in a browser tab for the tools that need it (flows, pane pictures).
+
 Options (add them to `args` after `ps-nodered-mcp`):
 
 - `--url <address>`: the MCP route of Node-RED. Default `http://127.0.0.1:1880/physical-sandbox/mcp`; also `PS_NODERED_URL`.
-- `--user-dir <folder>`: Node-RED's user folder, where the key is read from `physical-sandbox/mcp-key`. Default `~/.node-red`; also `NODE_RED_USER_DIR`.
+- `--user-dir <folder>`: Node-RED's user folder (userDir). Default `~/.node-red`; also `NODE_RED_USER_DIR`. If you start Node-RED with `-u <folder>`, give the same folder here.
 
-The route answers only this computer, and only with that key, which the plugin creates when Node-RED starts.
+The key lives in `<userDir>/physical-sandbox/mcp-key`. The plugin creates it when Node-RED starts, and the bridge reads it from there. The route answers only this computer, and only with that key.
+
+### What the agent can do
+
+- **Look at the setup.** The status of the pane (sign-in, scene, editors and panes open, the pictures switch) and the robots available, with their joints and chains.
+- **Work out poses.** Inverse kinematics for a chain of a robot (position only in this version): the joint angles that put a hand at a point, or the closest ones when it is out of reach.
+- **Set the scene and play motion.** Place or remove robots, play state messages in the pane (a new attempt replaces the last one; loops can be stopped), and turn messages into a record for a `ps play` node.
+- **Open and save records.** Open a PS.com record, and save the stream as a new record or as the next version of the open one (same rules as the pane).
+- **Work on flows.** Read the flows in the open editor and propose a flow (see "No deploying" below).
+- **Look at the pane.** Only while the switch below is on.
+
+### The pictures switch
+
+The pane's switch 「エージェントに映像を渡す」 (Share frames with the agent) is **off by default** and is not kept across restarts: after Node-RED restarts, it is off again. While it is **on**, the agent can ask for pictures of the pane (`ps_pane_frames`), and those pictures include the background photo or video. They go to the agent, and through it to the AI provider the agent runs on. This is the one place where pictures leave your machine. They are never sent to PS.com. With the switch off, nothing is sent and the tool is refused.
+
+### No deploying
+
+The agent never deploys. `ps_flow_propose` makes the Node-RED editor import the nodes (in a new tab, with new ids, so nothing of yours is overwritten) as an undeployed change, and shows a notice. Nothing runs until you check it and press Deploy: your Deploy is the approval.
+
+### Example
+
+You ask Claude: 「OpenArm に盆踊りさせて」 (make OpenArm dance a bon odori). The agent places OpenArm, works out arm poses with the inverse kinematics tool (both hands above the head, and so on), and plays them in a loop. You see the robot dancing in the pane. Then it may offer a flow: it proposes `inject → ps play → mqtt out` in a new tab of the editor, waiting for your Deploy. Music is not part of this: sync it with another node. The background (the real site behind the robot) is chosen by you in the pane.
 
 ## Privacy and limits
 
-- The background photo or video never leaves this computer. Only the record (states and the scene's devices)
+- The background photo or video never leaves this computer, except while you turn on the pane's 「エージェントに映像を渡す」 switch: then the pictures go to the connected agent and its AI provider (never to PS.com). Only the record (states and the scene's devices)
   goes to PS.com, and only when you save.
 - When Node-RED's `adminAuth` is on, the textures of robots are not loaded (the shapes are).
 
