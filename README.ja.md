@@ -53,7 +53,7 @@ payload に `start`・`stop`・`rewind`、または `{"command": "start", "speed
 ご自身のロボット（URDF）は、どこにも送らずに表示できます。psbx の main ブランチ（次のリリースで入ります。PyPI の 0.1.2 にはまだありません）で変換してください。
 
 ```sh
-psbx machine bundle path/to/robot.urdf --out ~/robots --name myarm
+psbx machine bundle path/to/robot.urdf --out ~/robots/myarm --name myarm
 ```
 
 そのフォルダを Node-RED の `settings.js` で指定します。
@@ -66,11 +66,11 @@ physicalSandbox: {
 },
 ```
 
-`~` はホームフォルダです。それ以外の相対パスは、ユーザーフォルダから見たパスになります。このようなロボットを使った記録は、PS.com にそのロボットがないため PS.com には保存できず、このパソコンに「PS.com 未保存」として残ります。
+ロボットごとに、指定したフォルダの下に専用のフォルダを作ります（`--out` は `bundle.json` を書き出すフォルダです）。`~` はホームフォルダです。それ以外の相対パスは、ユーザーフォルダから見たパスになります。このようなロボットを使った記録は、PS.com にそのロボットがないため PS.com には保存できず、このパソコンに「PS.com 未保存」として残ります。
 
 ## PS.com へのログインと保存
 
-ペインの「PS.com にログイン」を押すと、6 桁のコードが表示されます。`https://physicalsandbox.com/vr` を開いてコードを入力すると、ペインがログインした状態になります。トークンは `<userDir>/physical-sandbox/ps-com-token.json` に保存されます。
+ペインの「PS.com にログイン」を押すと、6 桁のコードと、開くアドレス（`<catalogBase>/vr`。既定は `https://physicalsandbox.com/vr`）が表示されます。そのアドレスを開いてコードを入力すると、ペインがログインした状態になります。トークンは `<userDir>/physical-sandbox/ps-com-token.json` に保存されます。
 
 PS.com に接続できない（オフライン・ログインしていない・PS.com の障害）などで保存できなかったときは、記録を `<userDir>/physical-sandbox/unsent/` に残し、ペインに「PS.com 未保存」と「再送信する」ボタンを表示します。Node-RED を再起動しても残ります。上書き保存の対象が別の場所で変更されていたときは、その記録は新しい記録として保存され、ペインにその旨が表示されます。
 

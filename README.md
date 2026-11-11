@@ -74,7 +74,7 @@ Your own robot (a URDF) can be shown without sending it anywhere. Convert it wit
 (the next release; 0.1.2 on PyPI does not have it yet):
 
 ```sh
-psbx machine bundle path/to/robot.urdf --out ~/robots --name myarm
+psbx machine bundle path/to/robot.urdf --out ~/robots/myarm --name myarm
 ```
 
 and tell Node-RED the folder in `settings.js`:
@@ -87,13 +87,13 @@ physicalSandbox: {
 },
 ```
 
-`~` is your home folder, and other relative paths are taken from the user directory. A record that uses such a
+Each robot goes in its own folder under the configured folder (`--out` is the folder `bundle.json` is written into). `~` is your home folder, and other relative paths are taken from the user directory. A record that uses such a
 robot cannot be saved to PS.com (PS.com does not have the robot); it stays on this computer as 「PS.com 未保存」.
 
 ## PS.com: sign-in and saving
 
-Press 「PS.com にログイン」 in the pane. It shows a 6-digit code; open `https://physicalsandbox.com/vr`, enter
-the code, and the pane is signed in. The token is kept in `<userDir>/physical-sandbox/ps-com-token.json`.
+Press 「PS.com にログイン」 in the pane. It shows a 6-digit code and the address to open (`<catalogBase>/vr`, which is
+`https://physicalsandbox.com/vr` by default); enter the code there and the pane is signed in. The token is kept in `<userDir>/physical-sandbox/ps-com-token.json`.
 
 If a save cannot reach PS.com (offline, signed out, PS.com failing), the record is kept in
 `<userDir>/physical-sandbox/unsent/` and the pane shows 「PS.com 未保存」 with a button 「再送信する」 (Send
