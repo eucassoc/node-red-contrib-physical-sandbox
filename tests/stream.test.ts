@@ -79,8 +79,9 @@ test('an app record keeps its position and yaw samples and its item device', () 
   assert.equal(scene.site, 'yard');
   assert.deepEqual(scene.floor?.corners, [{ x: 0, y: 0, z: 0 }, { x: 2, y: 0, z: 0 }, { x: 2, y: 0, z: 1.5 }, { x: 0, y: 0, z: 1.5 }]);
   assert.deepEqual(scene.floor?.edgesM, [2, 1.5]);
-  // so101-1 has a trace but no outside name in the record: it answers to its own id
-  assert.equal(scene.names['so101-1'], 'so101-1');
+  // so101-1 has a trace but no outside name in the record: it answers to its own id, on this stream only
+  assert.deepEqual(scene.names, record.names);
+  assert.deepEqual(scene.streamNames, { 'so101-1': 'so101-1' });
 
   const item = messages.filter((m) => m.topic === 'ps/yard/box-1/state');
   assert.deepEqual(item.map((m) => m.payload), [
@@ -94,6 +95,8 @@ test('an app record keeps its position and yaw samples and its item device', () 
   const traceOf = (r: any, id: string) => r.traces.find((t: any) => t.deviceId === id)?.samples;
   for (const id of ['a1', 'so101-1', 'box-1']) assert.deepEqual(traceOf(back, id), traceOf(record, id), id);
   assert.ok(back.equipment.devices.some((d: any) => d.id === 'box-1' && d.type === 'item'));
+  assert.deepEqual(back.names, record.names, 'a name given for the stream only is not written');
+  assert.deepEqual(back.equipment.devices, record.equipment.devices, 'devices as the record wrote them');
   assert.deepEqual(back.floor.corners, [{ x: 0, y: 0, z: 0 }, { x: 2, y: 0, z: 0 }, { x: 2, y: 0, z: 1.5 }, { x: 0, y: 0, z: 1.5 }]);
 });
 
@@ -247,4 +250,35 @@ test('saving over keeps a pose the scene did not move, and adds the trace of a d
 
   const untouched = mergeStreamInto(fixture('psbx-record.json'), recordToMessages(fixture('psbx-record.json')).scene, []);
   assert.equal(sortedJson(untouched), sortedJson(fixture('psbx-record.json')));
+});
+
+test('a bare product names a local machine and stays bare, new or saved over', () => {
+  const record = fixture('psbx-record.json');
+  record.equipment.devices[0].product = 'so101';
+  record.equipment.devices[0].endEffector = 'gripper';
+  const { scene, messages } = recordToMessages(record);
+  assert.equal(scene.devices[0].product, 'so101');
+  assert.equal(scene.devices[0].endEffector, 'gripper');
+  const { record: asNew } = messagesToRecord(scene, messages);
+  assert.equal(asNew.equipment.devices[0].product, 'so101');
+  assert.equal(asNew.equipment.devices[0].endEffector, 'gripper');
+  const over = mergeStreamInto(record, scene, messages);
+  assert.equal(over.equipment.devices[0].product, 'so101');
+  assert.equal(over.equipment.devices[0].endEffector, 'gripper');
+
+  // A version 2 record: a device of the equipment and a robot placed by hand, both bare
+  const v2 = {
+    schemaVersion: 2,
+    markers: [{ id: 'm1', x: 0, y: 0, z: 0 }, { id: 'm2', x: 1, y: 0, z: 0 }],
+    equipment: { site: { id: 'yard' }, devices: [{ id: 'cam-1', product: 'mycam', parent: 'site' }] },
+    placements: [{ assetId: 'a1', robotId: 'mybot', x: 1, y: 0, z: 0, yaw: 0 }],
+    traces: [],
+  };
+  const old = recordToMessages(v2);
+  assert.deepEqual(old.scene.devices.map((d) => d.product), ['mycam', 'mybot']);
+  const merged = mergeStreamInto(v2, old.scene, [state('yard', 'a1', { at: 0, position: [1, 0, 0] })]);
+  assert.deepEqual(merged.equipment.devices.map((d: any) => d.product), ['mycam', 'mybot']);
+  assert.equal(merged.schemaVersion, 3);
+  assert.deepEqual(merged.traces, [{ deviceId: 'a1', samples: [{ t: 0, position: [1, 0, 0] }] }]);
+  assert.equal(v2.equipment.devices[0].product, 'mycam', 'the record given is not changed');
 });

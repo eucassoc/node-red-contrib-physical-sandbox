@@ -55,6 +55,11 @@ export interface Scene {
   devices: Device[];
   /** Outside name (the topic's `<id>`) → device id. */
   names: Record<string, string>;
+  /**
+   * Outside names that only this stream answers to, never written into a record: the id → id that
+   * `recordToMessages` gives a device with a trace but no outside name. `names` wins over these.
+   */
+  streamNames?: Record<string, string>;
 }
 
 /** PS.com record.js: at most thirty samples a second per device, and at most this many in all. */
@@ -105,7 +110,7 @@ export function messagesToRecord(
     const payload = message.payload;
     if (!isObject(payload) || !Number.isFinite(payload.at)) continue;
 
-    const id = own(scene.names, topic.id);
+    const id = own(scene.names, topic.id) ?? own(scene.streamNames ?? {}, topic.id);
     const device = id === undefined ? undefined : byId.get(id);
     if (!device) {
       if (!skipped.includes(topic.id)) skipped.push(topic.id);
@@ -182,14 +187,14 @@ function moverFields(payload: Json): Fields {
  *
  * The site is `opts.site`, else the record's `equipment.site.id`, else `local`. The names are the
  * record's (every device to itself when it has none, PS.com equipment-rules.js `defaultNames`); a
- * device with a trace but no outside name answers to its own id, added to the scene's names, so
- * every trace can be streamed. A record carries no background or camera: those stay null.
+ * device with a trace but no outside name answers to its own id in `scene.streamNames`, so every
+ * trace can be streamed without the record that is saved later gaining a name it did not have. A record carries no background or camera: those stay null.
  */
 export function recordToMessages(
   record: Json,
   opts: { startAt?: number; site?: string } = {},
 ): { scene: Scene; messages: Message[] } {
-  const rec: Json = upgradeProject(record) ?? {};
+  const rec: Json = asVersion3(record) ?? {};
   const devices: Device[] = structuredClone(list(rec.equipment?.devices).filter((d) => isObject(d) && typeof d.id === 'string'));
   const recordSite = rec.equipment?.site?.id;
   const site = opts.site ?? (isTopicName(recordSite) ? recordSite : 'local');
@@ -198,11 +203,12 @@ export function recordToMessages(
   const names: Record<string, string> = isObject(rec.names)
     ? Object.fromEntries(Object.entries(rec.names).filter(([, id]) => typeof id === 'string'))
     : Object.fromEntries(devices.map((d) => [d.id, d.id]));
+  const streamNames: Record<string, string> = {};
   const outsideOf = (id: string): string | undefined => {
     const name = Object.keys(names).find((k) => names[k] === id);
     if (name !== undefined) return name;
     if (Object.hasOwn(names, id)) return undefined;   // its id is another device's outside name
-    names[id] = id;
+    streamNames[id] = id;
     return id;
   };
 
@@ -232,6 +238,7 @@ export function recordToMessages(
     floor: sceneFloor(rec.floor),
     devices,
     names,
+    ...(Object.keys(streamNames).length ? { streamNames } : {}),
   };
   return { scene, messages };
 }
@@ -271,11 +278,10 @@ function sceneFloor(raw: unknown): Scene['floor'] {
  * - a device the scene has and the base does not is added, with the outside names the scene gives it;
  *
  * and everything else (every other top-level key, device, trace and field) stays as it was. A
- * record older than version 3 is upgraded first; a version 3 record is used exactly as it is.
+ * record older than version 3 is upgraded first (asVersion3); a version 3 record is used exactly as it is.
  */
 export function mergeStreamInto(baseRecord: Json, scene: Scene, messages: Message[]): Json {
-  const isV3 = typeof baseRecord?.schemaVersion === 'number' && baseRecord.schemaVersion >= SCHEMA_VERSION;
-  const out: Json = structuredClone(isV3 ? baseRecord : upgradeProject(baseRecord));
+  const out: Json = structuredClone(asVersion3(baseRecord));
 
   if (!isObject(out.equipment)) out.equipment = {};
   if (!Array.isArray(out.equipment.devices)) out.equipment.devices = [];
@@ -311,4 +317,35 @@ export function mergeStreamInto(baseRecord: Json, scene: Scene, messages: Messag
     else out.traces[at] = { ...out.traces[at], samples: trace.samples };
   }
   return out;
+}
+
+/**
+ * A record as version 3, with every device's `product` and `endEffector` as the record wrote them.
+ *
+ * A version 3 record comes back as it is. An older one goes through PS.com's `upgradeProject`,
+ * and then each device gets back the product and end effector it was written with (a placement's
+ * `robotId`): **in this package a bare product (`mybot`) names a local machine**, found before
+ * the catalog, so the catalog ref (`physical-sandbox/mybot:1`) that PS.com's readers mend it into
+ * would point somewhere else.
+ */
+function asVersion3(record: Json): Json {
+  if (!isObject(record)) return record;
+  if (typeof record.schemaVersion === 'number' && record.schemaVersion >= SCHEMA_VERSION) return record;
+  const written = new Map<string, Json>();
+  for (const d of list(record.equipment?.devices)) {
+    if (isObject(d) && typeof d.id === 'string') written.set(d.id, d);
+  }
+  for (const p of list(record.placements)) {
+    if (isObject(p) && typeof p.assetId === 'string') written.set(p.assetId, { product: p.robotId });
+  }
+  const upgraded: Json = upgradeProject(record);
+  if (!Array.isArray(upgraded?.equipment?.devices)) return upgraded;
+  const devices = upgraded.equipment.devices.map((d: unknown) => {
+    const was = isObject(d) ? written.get(d.id) : undefined;
+    if (!isObject(d) || !was) return d;
+    const kept: Json = { ...d };
+    for (const key of ['product', 'endEffector']) if (key in was) kept[key] = was[key];
+    return kept;
+  });
+  return { ...upgraded, equipment: { ...upgraded.equipment, devices } };
 }
