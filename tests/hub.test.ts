@@ -339,3 +339,105 @@ test('a full stream says so in the status: later live states move the panes but 
   hub.clearStream();
   assert.equal(hub.status().full, false);
 });
+
+// ---- the agent's messages (playMessages) ----
+
+test('playMessages plays the agent\'s messages from now, their at taken from the first one; bad ones by index, another site\'s skipped', () => {
+  const { red, hub, clock } = setup();
+  hub.open(twoDeviceRecord, { file: 'two', record: twoDeviceRecord });
+  const start = clock.now();
+  const played = hub.playMessages([
+    { topic: 'ps/local/arm/state', payload: { at: 5066, joints: { j: 0.2 } } },
+    { topic: 'ps/local/arm/state', payload: { at: 5000, joints: { j: 0.1 } } },
+    'not a message',
+    { topic: 'ps/local/arm', payload: { at: 1, joints: { j: 1 } } },
+    { topic: 'ps/local/arm/state', payload: { joints: { j: 1 } } },
+    { topic: 'ps/local/arm/state', payload: { at: 5033, joints: 'up' } },
+    { topic: 'ps/yard/arm/state', payload: { at: 5000, joints: { j: 1 } } },
+    { topic: 'ps/local/box/state', payload: JSON.stringify({ at: 5033, type: 'item', parent: 'site', xyz: [2, 0, 0] }) },
+  ], {});
+  assert.deepEqual(played.invalid.map((p) => p.index), [2, 3, 4, 5]);
+  for (const p of played.invalid) assert.ok(typeof p.reason === 'string' && p.reason.length > 5, JSON.stringify(p));
+  assert.match(played.invalid[1].reason, /topic/);
+  assert.match(played.invalid[2].reason, /\bat\b/);
+  assert.match(played.invalid[3].reason, /joints|position/);
+  assert.deepEqual(played.skipped, [{ index: 6, site: 'yard' }]);
+  assert.deepEqual([played.count, played.duration], [3, 0.066]);
+  assert.deepEqual(red.retained('ps-pane/status').playing, { source: 'agent', t: 0, duration: 0.066 });
+  const sent = () => states(red.published).map((m) => [m.topic.split('/')[2], m.at - start, m.from]);
+  assert.deepEqual(sent(), [['arm', 0, 'agent']]);
+  clock.advance(33);
+  assert.deepEqual(sent().slice(1), [['box', 33, 'agent']]);
+  clock.advance(33);
+  assert.deepEqual(sent().slice(2), [['arm', 66, 'agent']]);
+  assert.equal(red.retained('ps-pane/status').playing, null, 'it ends');
+  // the agent's states are kept, on the clock, and take the place of the opened record's traces
+  assert.deepEqual(hub.liveBuffer().map((m) => [m.topic, m.at - start]), [['ps/local/arm/state', 0], ['ps/local/box/state', 33], ['ps/local/arm/state', 66]]);
+  assert.deepEqual(hub.streamBuffer().length, 3);
+});
+
+test('playMessages looping keeps the agent\'s messages once; stop ends it, and a record played or opened stops it too', () => {
+  const { red, hub, clock } = setup();
+  const wave = [0, 100, 200].map((at, i) => ({ topic: 'ps/local/arm/state', payload: { at, joints: { j: i / 10 } } }));
+  const played = hub.playMessages(wave, { loop: true });
+  assert.equal(played.count, 3);
+  clock.advance(1000);
+  assert.ok(states(red.published).length >= 12, 'several rounds have gone to the panes');
+  assert.equal(hub.streamBuffer().length, 3, 'kept once, not once a round');
+  assert.equal(hub.status().playing?.source, 'agent');
+  hub.stop();
+  assert.equal(hub.status().playing, null);
+  const count = states(red.published).length;
+  clock.advance(1000);
+  assert.equal(states(red.published).length, count, 'nothing after stop');
+
+  hub.playMessages(wave, { loop: true, speed: 2 });
+  clock.advance(60);
+  assert.equal(states(red.published).length - count, 2, 'at speed 2, the state at 100 ms goes at 50 ms');
+  hub.play(twoDeviceRecord);
+  assert.equal(hub.status().playing?.source, 'record');
+  hub.stop();
+  hub.playMessages(wave, { loop: true });
+  hub.open(twoDeviceRecord, { file: 'two', record: twoDeviceRecord });
+  assert.equal(hub.status().playing, null);
+  hub.close();
+  assert.equal(clock.pending(), 0);
+});
+
+test('playMessages with nothing playable plays nothing and leaves a play under way as it is', () => {
+  const { hub } = setup();
+  hub.playMessages([{ topic: 'ps/local/arm/state', payload: { at: 0, joints: { j: 0 } } }, { topic: 'ps/local/arm/state', payload: { at: 1000, joints: { j: 1 } } }], {});
+  const played = hub.playMessages([{ topic: 'nope' }], {});
+  assert.deepEqual([played.count, played.duration, played.invalid.length], [0, 0, 1]);
+  assert.equal(hub.status().playing?.source, 'agent');
+  hub.close();
+});
+
+test('a 60 s stream of 30 states a second with 16 joints is scheduled without holding the event loop for more than 50 ms at a time', () => {
+  const userDir = tmp();
+  const red = fakeRed({ userDir });
+  const clock = fakeClock();
+  // Every timer the hub sets is timed while it runs
+  let longest = 0;
+  const timed: typeof clock = {
+    ...clock,
+    setTimeout: (fn: () => void, ms: number) => clock.setTimeout(() => {
+      const t0 = performance.now();
+      fn();
+      longest = Math.max(longest, performance.now() - t0);
+    }, ms),
+  };
+  const hub = createHub(red.RED, { userDir, settings: readSettings({}, { userDir, env: {} }), clock: timed, fetchImpl: async () => { throw new Error('no network'); } });
+  const joints = (k: number) => Object.fromEntries(Array.from({ length: 16 }, (_, j) => [`joint_${j + 1}`, Math.round(Math.sin(k / 10 + j) * 1000) / 1000]));
+  const messages = Array.from({ length: 60 * 30 }, (_, k) => ({ topic: 'ps/local/openarm-1/state', payload: { at: Math.round(k * 1000 / 30), joints: joints(k) } }));
+  const t0 = performance.now();
+  const played = hub.playMessages(messages, {});
+  const scheduling = performance.now() - t0;
+  assert.equal(played.count, 1800);
+  assert.ok(scheduling < 50, `scheduling held the loop for ${scheduling.toFixed(1)} ms`);
+  for (let t = 0; t <= 60_000; t += 33) clock.advance(33);
+  assert.equal(hub.status().playing, null, 'played to the end');
+  assert.equal(hub.streamBuffer().length, 1800);
+  assert.ok(longest < 50, `one tick held the loop for ${longest.toFixed(1)} ms`);
+  hub.close();
+});

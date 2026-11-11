@@ -3,8 +3,8 @@
  *
  * - The scene (「場」: site, floor and camera, placed devices, names), kept in
  *   `<userDir>/physical-sandbox/scene.json` and restored at start.
- * - The stream: every message that comes in (`push`, from `ps in`, a record being played or, later,
- *   the agent) is checked as PS.com's devices/state.js checks a broker's (rubbish until it proves
+ * - The stream: every message that comes in (`push`, from `ps in`, a record being played, or the
+ *   agent's `playMessages`) is checked as PS.com's devices/state.js checks a broker's (rubbish until it proves
  *   otherwise, an older `at` never wins) and sent to every pane. A message for another site than
  *   the scene's moves nothing, as in the pane: it is not sent, counted, kept or saved. The stream buffer, what a save
  *   turns into a record, is the opened record's states on the record's own time (loaded when it is
@@ -58,6 +58,21 @@ export interface Status {
   full: boolean;
 }
 
+/** The agent's messages, sorted out: those the hub takes, those that are wrong (by index), another site's. */
+export interface SortedMessages {
+  messages: Message[];
+  invalid: { index: number; reason: string }[];
+  skipped: { index: number; site: string }[];
+}
+
+/** What playMessages played: how many and how long [s], and what it left out. */
+export interface AgentPlay {
+  count: number;
+  duration: number;
+  invalid: { index: number; reason: string }[];
+  skipped: { index: number; site: string }[];
+}
+
 export interface HubOptions {
   userDir: string;
   settings: PluginSettings;
@@ -97,6 +112,17 @@ export interface Hub {
   push(message: unknown, from: From, opts?: { retained?: boolean }): boolean;
   /** Play a record's state messages to the panes in time (not into the buffer); a play under way stops first. */
   play(record: unknown, opts?: { loop?: boolean; speed?: number; source?: string }): { count: number; duration: number };
+  /**
+   * The agent's messages, checked one by one as `push` checks them (a state must also move
+   * something): what is wrong is answered by index with the reason, another site's are skipped,
+   * and the rest are played to the panes in time from now, `from: 'agent'`, their `at` taken from
+   * the first (smallest) one. A play under way stops first, unless nothing here can be played.
+   * The states are kept in the buffer as agent states, on the clock, once: a loop does not keep
+   * them again each round.
+   */
+  playMessages(messages: unknown[], opts?: { loop?: boolean; speed?: number }): AgentPlay;
+  /** The agent's messages sorted out as playMessages sorts them, without playing them. */
+  sortMessages(messages: unknown[]): SortedMessages;
   stop(): void;
   /** What a save writes: the opened record's states (on its time), then the live and agent ones. */
   streamBuffer(): Message[];
@@ -180,23 +206,33 @@ export function normalizeScene(raw: unknown, site: string): Scene {
 }
 
 /**
- * One message as the hub takes it, or null: `ps/<site>/<id>/<kind>` with site and id topic names,
- * and a payload (an object, or JSON text) with a finite `at`. The payload is copied as plain JSON.
+ * One message as the hub takes it, or why not (in English, for the agent): `ps/<site>/<id>/<kind>`
+ * with site and id topic names, and a payload (an object, or JSON text) with a finite `at`. The
+ * payload is copied as plain JSON.
  */
-export function validMessage(raw: unknown): Message | null {
-  if (!isObject(raw) || typeof raw.topic !== 'string') return null;
+export function checkMessage(raw: unknown): { message: Message } | { problem: string } {
+  if (!isObject(raw) || typeof raw.topic !== 'string') return { problem: 'not an object with a topic (a string)' };
   const topic = parseTopic(raw.topic);
-  if (!topic || !isTopicName(topic.site) || !isTopicName(topic.id)) return null;
+  if (!topic || !isTopicName(topic.site) || !isTopicName(topic.id)) {
+    return { problem: 'the topic is not ps/<site>/<id>/<kind> (kind state, command or event; site and id without / + #)' };
+  }
   let payload: unknown = raw.payload;
   if (typeof payload === 'string') payload = decode(payload);
   else if (Buffer.isBuffer(payload)) payload = decode(payload.toString('utf8'));
-  if (!isObject(payload) || !Number.isFinite(payload.at)) return null;
+  if (!isObject(payload)) return { problem: 'the payload is not an object (or the JSON text of one)' };
+  if (!Number.isFinite(payload.at)) return { problem: 'payload.at is not a finite number (milliseconds)' };
   try {
     payload = plain(payload);
   } catch {
-    return null; // not JSON (a BigInt, a cycle)
+    return { problem: 'the payload is not plain JSON' }; // a BigInt, a cycle
   }
-  return { topic: raw.topic, payload: payload as Message['payload'], at: (payload as Json).at };
+  return { message: { topic: raw.topic, payload: payload as Message['payload'], at: (payload as Json).at } };
+}
+
+/** One message as the hub takes it, or null (see checkMessage). */
+export function validMessage(raw: unknown): Message | null {
+  const checked = checkMessage(raw);
+  return 'message' in checked ? checked.message : null;
 }
 
 export function createHub(RED: any, opts: HubOptions): Hub {
@@ -316,9 +352,10 @@ export function createHub(RED: any, opts: HubOptions): Hub {
   /**
    * One message into the stream. `fromOutside`: a played state is noted for its echo only when it
    * came from outside (`ps play`, whose output may go to a broker); the pane's own playback never
-   * leaves the hub.
+   * leaves the hub. `keep: false`: a state that moves the panes but is kept already (an agent loop's
+   * later rounds).
    */
-  function accept(raw: unknown, from: From, opts: { retained?: boolean }, fromOutside: boolean): boolean {
+  function accept(raw: unknown, from: From, opts: { retained?: boolean; keep?: boolean }, fromOutside: boolean): boolean {
     const message = validMessage(raw);
     if (!message) return false;
     const topic = parseTopic(message.topic)!;
@@ -328,7 +365,7 @@ export function createHub(RED: any, opts: HubOptions): Hub {
       const echo = from === 'mqtt' && isEcho(message);
       const type = isItemTopic(topic.id, message.payload) ? 'item' : 'mover';
       if (!applyState(store, { id: message.topic, type }, message.payload)) return false;
-      if (from !== 'record' && opts.retained !== true && !echo) keep(message);
+      if (from !== 'record' && opts.retained !== true && opts.keep !== false && !echo) keep(message);
     }
     publish(STATE_TOPIC, { ...message, from }, false);
     if (topic.kind === 'state') scheduleTick();
@@ -414,6 +451,61 @@ export function createHub(RED: any, opts: HubOptions): Hub {
 
   function stop(): void {
     if (stopRun()) publishStatus();
+  }
+
+  // ---- playing the agent's messages ----
+
+  /** A state that moves nothing (a mover with neither joints nor a position, an item with no parent or xyz). */
+  function stateProblem(message: Message): string | null {
+    const topic = parseTopic(message.topic)!;
+    if (topic.kind !== 'state') return null;
+    const type = isItemTopic(topic.id, message.payload) ? 'item' : 'mover';
+    if (applyState(newStore(), { id: message.topic, type }, message.payload)) return null;
+    return type === 'item'
+      ? 'an item\'s state needs parent (a string) and xyz ([x, y, z])'
+      : 'a state needs joints ({name: number}) or position ([x, y, z]), with yaw a number if given';
+  }
+
+  function sortMessages(raw: unknown[]): SortedMessages {
+    const sorted: SortedMessages = { messages: [], invalid: [], skipped: [] };
+    (Array.isArray(raw) ? raw : []).forEach((one, index) => {
+      const checked = checkMessage(one);
+      if ('problem' in checked) { sorted.invalid.push({ index, reason: checked.problem }); return; }
+      const { site } = parseTopic(checked.message.topic)!;
+      if (site !== scene.site) { sorted.skipped.push({ index, site }); return; }
+      const problem = stateProblem(checked.message);
+      if (problem) { sorted.invalid.push({ index, reason: problem }); return; }
+      sorted.messages.push(checked.message);
+    });
+    return sorted;
+  }
+
+  function playMessages(raw: unknown[], o: { loop?: boolean; speed?: number } = {}): AgentPlay {
+    const { messages: taken, invalid, skipped } = sortMessages(raw);
+    if (!taken.length) return { count: 0, duration: 0, invalid, skipped };
+    // On the stream's own time from 0, in time order (stable: the agent's order at the same time)
+    taken.sort((a, b) => a.at - b.at);
+    const first = taken[0].at;
+    const messages = taken.map((m) => ({ topic: m.topic, payload: { ...m.payload, at: m.at - first }, at: m.at - first }));
+    stopRun();
+    let round = 0;
+    const player = createPlayer({
+      messages,
+      clock,
+      speed: o.speed,
+      loop: o.loop === true,
+      onMessage: (m) => { accept(m, 'agent', { keep: round === 0 }, false); },
+      onRound: () => { round += 1; publishStatus(); },
+      onEnd: () => {
+        if (run?.player !== player) return;
+        run = null;
+        publishStatus();
+      },
+    });
+    run = { player, source: 'agent' };
+    publishStatus();
+    player.start();
+    return { count: player.count, duration: player.duration, invalid, skipped };
   }
 
   // ---- the opened record, status ----
@@ -570,6 +662,8 @@ export function createHub(RED: any, opts: HubOptions): Hub {
     },
     push,
     play,
+    playMessages,
+    sortMessages,
     stop,
     streamBuffer: () => plain([...loaded, ...live]),
     liveBuffer: () => plain(live),

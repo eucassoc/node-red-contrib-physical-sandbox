@@ -225,7 +225,8 @@ test('an MCP client on this machine, with the key the plugin made in the userDir
   const client = new Client({ name: 'smoke', version: '0.0.0' });
   await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${key}` } } }));
   try {
-    assert.deepEqual((await client.listTools()).tools.map((t) => t.name), ['ps_status', 'ps_flows_read', 'ps_flow_propose', 'ps_machines_list', 'ps_machine_joints', 'ps_ik']);
+    assert.deepEqual((await client.listTools()).tools.map((t) => t.name), ['ps_status', 'ps_flows_read', 'ps_flow_propose', 'ps_machines_list', 'ps_machine_joints', 'ps_ik',
+      'ps_scene_get', 'ps_scene_place', 'ps_scene_remove', 'ps_stream_play', 'ps_stream_stop', 'ps_record_inline', 'ps_record_open', 'ps_record_save']);
     const answer: any = await client.callTool({ name: 'ps_status', arguments: {} });
     assert.equal(JSON.parse(answer.content[0].text).scene.site, 'smoke');
   } finally { await client.close(); }
