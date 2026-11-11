@@ -34,6 +34,10 @@ export const WORDS = {
   placedNone: { ja: 'まだ何も置いていません', en: 'Nothing placed yet' },
   remove: { ja: '取り除く', en: 'Remove' },
   notDrawn: { ja: '{product} を読み込めませんでした', en: '{product} could not be loaded' },
+  // where a robot of the list comes from (src/core/machines.ts MachineSource)
+  sourceCatalog: { ja: 'PS.com のカタログ', en: 'PS.com catalog' },
+  sourceCache: { ja: 'このパソコンに保存済み', en: 'Saved on this computer' },
+  sourceLocal: { ja: 'このパソコンのフォルダ', en: 'Folder on this computer' },
 
   // playback
   playback: { ja: '再生', en: 'Playback' },
@@ -52,6 +56,10 @@ export const WORDS = {
   stop: { ja: '停止', en: 'Stop' },
   toStart: { ja: '頭へ', en: 'To the start' },
   playing: { ja: '再生中: {source}（{d} 秒）', en: 'Playing {source} ({d} s)' },
+  // what is playing, when it is not a record of PS.com or a file (src/plugin/hub.ts)
+  sourceAgent: { ja: 'エージェントのメッセージ', en: 'the agent\'s messages' },
+  sourceRecord: { ja: '送られた記録', en: 'a record sent to the pane' },
+  sourceMqtt: { ja: 'MQTT のメッセージ', en: 'MQTT messages' },
   openedRef: { ja: '開いている記録: {ref}（バージョン {version}）', en: 'Open: {ref} (version {version})' },
   openedFile: { ja: '開いている記録: {file}', en: 'Open: {file}' },
   openedNone: { ja: '記録は開いていません', en: 'No record is open' },
@@ -76,6 +84,7 @@ export const WORDS = {
   savedUnchanged: { ja: '変更はありません: {ref}（バージョン {version}）', en: 'Nothing changed: {ref} (version {version})' },
   savedKept: { ja: 'PS.com に保存できなかったため、このパソコンに残しました（{reason}）', en: 'Could not be saved to PS.com, kept on this computer ({reason})' },
   skipped: { ja: '{names} はどのロボットの名前でもないため、記録に入れませんでした', en: '{names} name no placed robot and were left out of the record' },
+  nameSeparator: { ja: '、', en: ', ' },
   recordingFull: { ja: '記録できる上限（{n} 件）に達しました。これより後の動きは表示されますが、記録されません', en: 'The recording is full ({n}): later states are shown but not recorded' },
   exportRecord: { ja: 'エクスポート', en: 'Export' },
   exported: { ja: 'エクスポートしました: {file}', en: 'Exported: {file}' },
@@ -124,8 +133,10 @@ export function lang(): Lang {
   return langOf(browser);
 }
 
-// Weakly held: a row the pane drew again is let go
+// Weakly held: a row the pane drew again is let go, and its reference is dropped every PRUNE_EVERY labels
 const tracked = new Set<WeakRef<HTMLElement>>();
+const PRUNE_EVERY = 200;
+let madeSincePrune = 0;
 const written = new WeakMap<HTMLElement, { key: WordKey; params: Record<string, unknown> }>();
 const listeners = new Set<() => void>();
 
@@ -155,20 +166,22 @@ export function setLang(value: unknown): void {
 /** The words of a key in the pane's language, filled in. */
 export const say = (key: WordKey, params: Record<string, unknown> = {}): string => fill(WORDS[key][lang()], params);
 
-/** The Japanese of a key, filled in. */
-export const ja = (key: WordKey, params: Record<string, unknown> = {}): string => fill(WORDS[key].ja, params);
-
-/** The English of a key, filled in. */
-export const en = (key: WordKey, params: Record<string, unknown> = {}): string => fill(WORDS[key].en, params);
-
 /** An element showing a key's words in the pane's language (written again when the language changes). */
 export function labelOf(key: WordKey, tag: string = 'span', params: Record<string, unknown> = {}): HTMLElement {
   const element = document.createElement(tag);
   element.append(say(key, params));
   tracked.add(new WeakRef(element));
+  madeSincePrune += 1;
+  if (madeSincePrune >= PRUNE_EVERY) {
+    madeSincePrune = 0;
+    for (const ref of tracked) if (!ref.deref()) tracked.delete(ref);
+  }
   written.set(element, { key, params });
   return element;
 }
+
+/** How many labels are kept for a language change (for tests). */
+export const trackedSize = (): number => tracked.size;
 
 /** A button labelled with a key. */
 export function buttonOf(key: WordKey, className = 'ps-button'): HTMLButtonElement {

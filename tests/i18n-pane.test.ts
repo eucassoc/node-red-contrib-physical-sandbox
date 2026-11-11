@@ -21,7 +21,8 @@ import { fakeClock, fakeRed } from './helpers/fake-red.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
-const japanese = /[぀-ヿ一-鿿]/;
+/** Kana, kanji, and the Japanese punctuation and full-width forms (、。（）). */
+const japanese = /[\u3000-\u303f\u3040-\u30ff\u4e00-\u9fff\uff00-\uffef]/;
 
 test('every pane word and every server word has a Japanese and an English, neither empty, and the English has no Japanese', () => {
   for (const [name, table] of [['pane', WORDS], ['server', PLAIN]] as const) {
@@ -119,7 +120,7 @@ async function render(language: string): Promise<string> {
     const overlay = doc.createElementNS('http://www.w3.org/2000/svg', 'svg') as unknown as SVGSVGElement;
     const floor = mountFloorUi({ root: floorRoot, overlay, api: fakeApi(), pixelAt: (x, y) => ({ x, y }) as any, pictureSize: () => ({ width: 100, height: 100 }) });
     floor.click(0, 0);
-    const place = mountPlaceUi({ robotsRoot: robots, placedRoot: placed, api: fakeApi(async () => ({ machines: [], offline: true })), dropTarget: doc.createElement('div'), floorPointAt: () => null, say() {} });
+    const place = mountPlaceUi({ robotsRoot: robots, placedRoot: placed, api: fakeApi(async () => ({ machines: [{ ref: 'physical-sandbox/so101:1', label: 'SO-101', source: 'catalog' }, { ref: 'ada/arm:2', label: 'ada/arm:2', source: 'cache' }], offline: true })), dropTarget: doc.createElement('div'), floorPointAt: () => null, say() {} });
     await place.refresh();
     place.setScene({ site: 'local', devices: [{ id: 'arm-1', product: 'ada/arm:1' }], names: {} } as any, [{ deviceId: 'arm-1', product: 'ada/arm:1' }]);
     const records = mountRecordsUi({ playRoot: play, saveRoot: save, accountRoot: account, api: fakeApi(async () => ({ signedIn: true, records: [] })), say() {} });
@@ -142,7 +143,7 @@ async function render(language: string): Promise<string> {
 
 test('in Japanese the pane\'s panels show no English, in English no Japanese', async () => {
   // what stays the same in both: the product's own names and the shape of a ref
-  const names = /PS\.com|Physical Sandbox|handle\/name|ada\/walk|ada\/arm|yard|local|walk|arm-1|arm|ada|Deploy|m\b/g;
+  const names = /physical-sandbox\/so101|SO-101|PS\.com|Physical Sandbox|handle\/name|ada\/walk|ada\/arm|yard|local|walk|arm-1|arm|ada|Deploy|m\b/g;
   const ja = await render('ja');
   const en = await render('en');
   assert.ok(ja.length > 200 && en.length > 200, 'something was drawn');
@@ -232,6 +233,8 @@ test('the editor\'s notice follows the editor language', async () => {
   assert.match(ja.notes[0].text, japanese);
   assert.doesNotMatch(en.notes[0].text, japanese);
   assert.match(en.notes[0].text, /Deploy/);
+  assert.match(ja.notes[0].text, /デプロイ/);
+  assert.doesNotMatch(ja.notes[0].text, /Deploy/);
 });
 
 test('the floor prompt and its note follow a language change; the page language follows too', () => {

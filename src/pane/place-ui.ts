@@ -6,12 +6,15 @@
 import type { Api } from './comms-client.js';
 import { PaneError } from './comms-client.js';
 import type { PaneScene } from './stage.js';
-import { buttonOf, labelOf, say as word } from './words.js';
+import { buttonOf, labelOf, say as word, type WordKey } from './words.js';
 
 type Json = Record<string, any>;
 
 export interface MachineRow { ref: string; label: string; source: string; kind: string }
 export interface PlacedRow { id: string; product: string; note: string | null }
+
+/** Where a robot comes from (src/core/machines.ts MachineSource), in words. */
+const SOURCE_WORDS: Record<string, WordKey> = { catalog: 'sourceCatalog', cache: 'sourceCache', local: 'sourceLocal' };
 
 /** The drag's data type: the product a dragged row stands for. */
 export const DRAG_TYPE = 'application/x-ps-product';
@@ -91,7 +94,8 @@ export function mountPlaceUi(opts: {
       name.textContent = row.label;
       const source = document.createElement('small');
       source.className = 'ps-source';
-      source.textContent = row.ref === row.label ? row.source : `${row.ref} · ${row.source}`;
+      if (row.ref !== row.label) source.append(`${row.ref} · `);
+      source.append(Object.hasOwn(SOURCE_WORDS, row.source) ? labelOf(SOURCE_WORDS[row.source], 'span') : row.source);
       item.append(name, ' ', source);
       item.addEventListener('dragstart', (event) => {
         event.dataTransfer?.setData(DRAG_TYPE, row.ref);

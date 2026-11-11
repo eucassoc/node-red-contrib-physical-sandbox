@@ -1,7 +1,14 @@
 // The pane's words (src/pane/words.ts): Japanese with its English beside it.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { en, ja, WORDS } from '../../src/pane/words.js';
+import { WORDS } from '../../src/pane/words.js';
+
+/** A key's words in one language, filled in (as the pane's `say` does). */
+const fill = (language: 'ja' | 'en') => (key: keyof typeof WORDS, params: Record<string, unknown> = {}): string =>
+  WORDS[key][language].replace(/\{(\w+)\}/g, (all, name) => (Object.hasOwn(params, name) ? String(params[name]) : all));
+const ja = fill('ja');
+const en = fill('en');
+
 
 test('every word has its Japanese and its English, with the same {names} to fill', () => {
   const japanese = /[぀-ヿ一-鿿]/;

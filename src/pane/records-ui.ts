@@ -10,7 +10,7 @@
  */
 import type { Api } from './comms-client.js';
 import { PaneError } from './comms-client.js';
-import { buttonOf, labelOf, say as word, onLang } from './words.js';
+import { buttonOf, labelOf, lang, say as word, onLang, type WordKey } from './words.js';
 
 type Json = Record<string, any>;
 
@@ -50,12 +50,19 @@ export const siteResetOffered = (site: string | null, status: PaneStatus | null)
 /** `said`, then once the names no robot answers to that a save or an export left out. */
 function withSkipped(said: string, answer: Json): string {
   const skipped = Array.isArray(answer.skipped) ? answer.skipped.filter((n: unknown) => typeof n === 'string') : [];
-  return skipped.length ? `${said} ${word('skipped', { names: skipped.join('、') })}` : said;
+  return skipped.length ? `${said} ${word('skipped', { names: skipped.join(word('nameSeparator')) })}` : said;
 }
+
+/** Why a save was kept, in the pane's language (`reasonWords` of the answer; `reason` is the Japanese the tools show). */
+const keptReason = (answer: Json): string => {
+  const both = answer.reasonWords;
+  const chosen = both && typeof both === 'object' ? both[lang()] : undefined;
+  return typeof chosen === 'string' ? chosen : String(answer.reason ?? '');
+};
 
 /** What the pane says after a save: saved, unchanged or kept, then the names left out. */
 export const savedText = (answer: Json): string => withSkipped(answer.saved === false
-  ? word('savedKept', { reason: answer.reason ?? '' })
+  ? word('savedKept', { reason: keptReason(answer) })
   : word(answer.unchanged ? 'savedUnchanged' : 'saved', { ref: answer.ref, version: answer.version }), answer);
 
 /** What the pane says after an export: the file, then the names left out. */
@@ -67,9 +74,14 @@ export function openedLine(status: PaneStatus | null): string {
   return 'ref' in opened ? word('openedRef', { ref: opened.ref, version: opened.version }) : word('openedFile', { file: opened.file });
 }
 
+/** What plays that is not a PS.com record or a file, said in words (src/plugin/hub.ts run sources). */
+const PLAYING_SOURCES: Record<string, WordKey> = { agent: 'sourceAgent', record: 'sourceRecord', mqtt: 'sourceMqtt' };
+
 export function playingLine(status: PaneStatus | null): string | null {
   const playing = status?.playing;
-  return playing ? word('playing', { source: playing.source, d: Math.round(playing.duration * 10) / 10 }) : null;
+  if (!playing) return null;
+  const named = Object.hasOwn(PLAYING_SOURCES, playing.source) ? word(PLAYING_SOURCES[playing.source]) : playing.source;
+  return word('playing', { source: named, d: Math.round(playing.duration * 10) / 10 });
 }
 
 export const unsentLines = (status: PaneStatus | null): { name: string; text: string }[] =>

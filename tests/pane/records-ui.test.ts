@@ -3,7 +3,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { myRecordRows, NAME, openedLine, playAgainBody, playingLine, recordingLine, saveButtons, siteResetOffered, unsentLines } from '../../src/pane/records-ui.js';
 import { machineRows, placedRows, placeRequest } from '../../src/pane/place-ui.js';
-import { ja, setLang } from '../../src/pane/words.js';
+import { setLang, WORDS } from '../../src/pane/words.js';
+
+/** A key's words in one language, filled in (as the pane's `say` does). */
+const fill = (language: 'ja' | 'en') => (key: keyof typeof WORDS, params: Record<string, unknown> = {}): string =>
+  WORDS[key][language].replace(/\{(\w+)\}/g, (all, name) => (Object.hasOwn(params, name) ? String(params[name]) : all));
+const ja = fill('ja');
+
 
 setLang('ja'); // these lines are checked in Japanese (the language tests are in words.test.ts)
 
