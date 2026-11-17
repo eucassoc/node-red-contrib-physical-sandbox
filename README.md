@@ -36,9 +36,10 @@ The labels below are the English ones (the Japanese ones are in [README.ja.md](R
   the lengths of edges 1→2 and 2→3 in metres, and press "Decide". The robots are placed on this floor
   at real scale.
 - **Robots.** The list is made from three places: the PS.com catalog, the psbx cache
-  (`~/.cache/physical-sandbox`) and local folders (below). Drag a robot onto the floor to place it. A placed
-  robot has "Move" on its line (the next click on the floor puts it there; Esc cancels) and its facing in
-  degrees; while it waits for its place, the left and right arrow keys turn it. Without a
+  (`~/.cache/physical-sandbox`) and local folders (below). Drag a robot onto the floor to place it. Click a placed
+  robot to pick it, as on PS.com: "Re-place" (the next click on the floor puts it there) and "Delete" come up
+  beside it, the left and right arrow keys turn it, and Esc lets go. Its line in the list has the same two
+  buttons and its facing in degrees. Without a
   connection to PS.com, only the robots on this computer are listed.
 - **Records.** Open one of your own records on PS.com (the list needs a sign-in), a record by `handle/name`, or
   a record file from this computer. Then play, stop or go back to the start (these play the open record

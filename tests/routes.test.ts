@@ -806,7 +806,8 @@ test('every sentence shown to people keeps the package\'s wording (no 直す・�
   // and every Japanese line of README.ja.md
   for (const line of readFileSync(join(import.meta.dirname, '..', 'README.ja.md'), 'utf8').split('\n')) if (japanese.test(line)) sentences.push(['README.ja.md', line.trim()]);
   assert.ok(sentences.length > 30, `${sentences.length} sentences found`);
-  for (const [where, sentence] of sentences) assert.doesNotMatch(sentence.replaceAll('読み込', ''), banned, `${where}: ${sentence}`);
+  // 置き直す is PS.com's own word for putting a robot somewhere else (2026-11-17): the one 直す kept
+  for (const [where, sentence] of sentences) assert.doesNotMatch(sentence.replaceAll('読み込', '').replaceAll('置き直', ''), banned, `${where}: ${sentence}`);
 });
 
 test('a retained state moves the panes but does not take the place of the opened record\'s trace', async () => {

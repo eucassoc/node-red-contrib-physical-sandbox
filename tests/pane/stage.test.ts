@@ -389,3 +389,17 @@ test('the site hangs in the camera\'s world as PS.com\'s video stage hangs it: R
   const ros = stage.floorPointAt(px.u / 2, px.v / 2 + 60)!;
   close(ros[0], 1, 'ROS x', 1e-6); close(ros[1], -2, 'ROS y', 1e-6);
 });
+
+// 2026-11-17: a robot is picked by a click on it, as on PS.com's screen: the page point of where it stands
+test('a point on the floor is a point of the page, the way back from floorPointAt, with a camera and without', () => {
+  const solvedStage = makeStage().stage;
+  solvedStage.setBackground({ style: {} }, { width: 1280, height: 720 });
+  solvedStage.setCamera(knownCamera());
+  const orbitStage = makeStage().stage;
+  for (const stage of [solvedStage, orbitStage]) {
+    const page = stage.pagePointOf([0.4, 0.3])!;
+    const back = stage.floorPointAt(page.x, page.y)!;
+    close(back[0], 0.4, 'ROS x', 1e-6);
+    close(back[1], 0.3, 'ROS y', 1e-6);
+  }
+});

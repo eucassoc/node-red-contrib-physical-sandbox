@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { myRecordRows, NAME, openedLine, playAgainBody, playingLine, recordingLine, saveButtons, siteResetOffered, unsentLines } from '../../src/pane/records-ui.js';
-import { machineRows, moveRequest, placedRows, placeRequest, turnedBy } from '../../src/pane/place-ui.js';
+import { machineRows, moveRequest, placedRows, placeRequest, rowAt, turnedBy } from '../../src/pane/place-ui.js';
 import { setLang, WORDS } from '../../src/pane/words.js';
 
 /** A key's words in one language, filled in (as the pane's `say` does). */
@@ -103,4 +103,20 @@ test('a placed robot is re-placed and turned under its own id, keeping what the 
   assert.equal(turnedBy(60, 'ArrowRight'), 45);
   assert.equal(turnedBy(175, 'ArrowLeft'), -170);
   assert.equal(turnedBy(60, 'Enter'), null);
+});
+
+// 2026-11-17: the same hands as PS.com's screen: a click on a robot picks it
+test('a click picks the placed robot standing nearest it on the page, within reach', () => {
+  const scene = { site: 'local', names: {}, devices: [
+    { id: 'a-1', product: 'x/a:1', pose: { xyz: [0, 0, 0], rpy: [0, 0, 0] } },
+    { id: 'b-1', product: 'x/b:1', pose: { xyz: [1, 0, 0], rpy: [0, 0, 0] } },
+  ] };
+  const rows = placedRows(scene);
+  // the page shows a metre as 100 px, the site's origin at (200, 200)
+  const pageOf = ([x, y]: [number, number]) => ({ x: 200 + x * 100, y: 200 - y * 100 });
+  assert.equal(rowAt(rows, { x: 210, y: 195 }, pageOf)?.id, 'a-1');
+  assert.equal(rowAt(rows, { x: 285, y: 205 }, pageOf)?.id, 'b-1');
+  assert.equal(rowAt(rows, { x: 500, y: 200 }, pageOf), null, 'out of reach of both');
+  // a robot behind the camera has no page point
+  assert.equal(rowAt(rows, { x: 200, y: 200 }, () => null), null);
 });

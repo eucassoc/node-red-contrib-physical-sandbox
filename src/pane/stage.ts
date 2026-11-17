@@ -17,7 +17,7 @@
  */
 import * as THREE from 'three';
 import * as defaultRobotBuild from '../pscom/robot-build.js';
-import { floorHit, frustumOf, rayThroughPixel } from '../pscom/camera-model.js';
+import { floorHit, frustumOf, projectPoint, rayThroughPixel } from '../pscom/camera-model.js';
 import { fitRect } from '../pscom/fit-rect.js';
 import { DISTANCE_LIMITS, defaultOrbit, dragOrbit, orbitEye, wheelFactor, zoomOrbit } from '../pscom/orbit.js';
 import { applyState as storeState, newStore, parseTopic } from '../pscom/state.js';
@@ -94,6 +94,8 @@ export interface PaneStage {
   pixelAt(clientX: number, clientY: number): { u: number; v: number } | null;
   /** A point of the page as a point on the floor, ROS [x, y] metres, or null when it misses it. */
   floorPointAt(clientX: number, clientY: number): [number, number] | null;
+  /** A point on the floor (ROS [x, y] metres) as a point of the page, or null when it is not in view. */
+  pagePointOf(xy: [number, number]): { x: number; y: number } | null;
   /** The devices that could not be drawn: { deviceId, product, error }. */
   missing(): { deviceId: string; product: string; error: string }[];
   /** For tests and the agent: where a device's holder is (ROS) and a joint's value. */
@@ -474,6 +476,21 @@ export function createPaneStage(canvas: any, opts: StageOptions): PaneStage {
     return [hit.x + 0, 0 - hit.z];
   }
 
+  function pagePointOf(xy: [number, number]): { x: number; y: number } | null {
+    const box = canvas.getBoundingClientRect?.() ?? { left: 0, top: 0 };
+    // ROS to three (the site frame, y up): the way back from floorPointAt
+    const site = { x: xy[0], y: 0, z: -xy[1] };
+    if (solved) {
+      const size = pictureSize();
+      const pixel = projectPoint(solved.intr, solved.extr, site);
+      if (!size || !pixel) return null;
+      return { x: box.left + rect.x + (pixel.u / size.width) * rect.w, y: box.top + rect.y + (pixel.v / size.height) * rect.h };
+    }
+    const p = new THREE.Vector3(site.x, site.y, site.z).project(camera);
+    if (p.z < -1 || p.z > 1) return null;
+    return { x: box.left + rect.x + ((p.x + 1) / 2) * rect.w, y: box.top + rect.y + ((1 - p.y) / 2) * rect.h };
+  }
+
   // ---- one picture of it all ----
 
   /** Every device back at its pose and its joints at zero, then the states held now shown. */
@@ -565,6 +582,7 @@ export function createPaneStage(canvas: any, opts: StageOptions): PaneStage {
     picture,
     pixelAt,
     floorPointAt,
+    pagePointOf,
     missing: () => missingList.map((m) => ({ ...m })),
     placeOf(id) {
       const h = held.get(id);

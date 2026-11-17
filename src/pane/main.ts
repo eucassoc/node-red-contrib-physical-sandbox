@@ -192,6 +192,8 @@ const place = mountPlaceUi({
   say,
   // The corners being clicked own the floor's clicks; a robot waiting for its place shows the same cursor
   busy: () => floor.picking(),
+  pagePointOf: (xy) => stage.pagePointOf(xy),
+  menuRoot: stageBox,
   onArmed: (armed) => stageBox.classList.toggle('ps-placing', armed),
 });
 
