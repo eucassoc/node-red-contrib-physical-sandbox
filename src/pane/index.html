@@ -37,7 +37,10 @@
     #ps-stage > .ps-background, #ps-overlay { position: absolute; pointer-events: none; }
     #ps-stage > .ps-background { object-fit: fill; }
     #ps-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-    #ps-stage.ps-picking #ps-canvas { cursor: crosshair; }
+    #ps-stage.ps-picking #ps-canvas, #ps-stage.ps-placing #ps-canvas { cursor: crosshair; }
+    .ps-device.ps-armed { outline: 2px solid #ff9a3c; outline-offset: 2px; border-radius: 4px; }
+    .ps-facing { font-size: 12px; white-space: nowrap; }
+    .ps-facing input { width: 4.5em; }
     #ps-overlay { overflow: visible; }
     .ps-floor-corner { fill: var(--ps-corner); stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
     .ps-floor-edge { fill: none; stroke: var(--ps-corner); }

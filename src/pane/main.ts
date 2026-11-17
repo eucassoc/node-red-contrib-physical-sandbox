@@ -190,6 +190,9 @@ const place = mountPlaceUi({
   dropTarget: canvas,
   floorPointAt: (x, y) => stage.floorPointAt(x, y),
   say,
+  // The corners being clicked own the floor's clicks; a robot waiting for its place shows the same cursor
+  busy: () => floor.picking(),
+  onArmed: (armed) => stageBox.classList.toggle('ps-placing', armed),
 });
 
 const playSection = byId<HTMLElement>('ps-play-section');

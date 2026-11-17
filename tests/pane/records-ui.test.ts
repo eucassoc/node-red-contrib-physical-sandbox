@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { myRecordRows, NAME, openedLine, playAgainBody, playingLine, recordingLine, saveButtons, siteResetOffered, unsentLines } from '../../src/pane/records-ui.js';
-import { machineRows, placedRows, placeRequest } from '../../src/pane/place-ui.js';
+import { machineRows, moveRequest, placedRows, placeRequest, turnedBy } from '../../src/pane/place-ui.js';
 import { setLang, WORDS } from '../../src/pane/words.js';
 
 /** A key's words in one language, filled in (as the pane's `say` does). */
@@ -60,8 +60,8 @@ test('the robots list takes the rows of GET machines; the placed list says which
   assert.deepEqual(machineRows(null), []);
   const scene = { site: 'local', names: {}, devices: [{ id: 'openarm-1', product: 'physical-sandbox/openarm:3' }, { id: 'ghost-1', product: 'gone/ghost:1' }] };
   assert.deepEqual(placedRows(scene, [{ deviceId: 'ghost-1', product: 'gone/ghost:1' }]), [
-    { id: 'openarm-1', product: 'physical-sandbox/openarm:3', note: null },
-    { id: 'ghost-1', product: 'gone/ghost:1', note: 'gone/ghost:1 を読み込めませんでした' },
+    { id: 'openarm-1', product: 'physical-sandbox/openarm:3', note: null, xy: [0, 0], yawDeg: 0 },
+    { id: 'ghost-1', product: 'gone/ghost:1', note: 'gone/ghost:1 を読み込めませんでした', xy: [0, 0], yawDeg: 0 },
   ]);
   assert.deepEqual(placeRequest('physical-sandbox/openarm', [1.5, -0.25]), { product: 'physical-sandbox/openarm', xyz: [1.5, -0.25, 0], yaw: 0 });
 });
@@ -86,4 +86,21 @@ test('「現地をもとに戻す」 is offered only when the scene\'s site is n
   assert.equal(siteResetOffered(null, { defaultSite: 'local' }), false);
   assert.equal(siteResetOffered('yard', null), false);
   assert.equal(ja('site', { site: 'yard' }), '現地: yard');
+});
+
+// 2026-11-17: a robot once placed could only be removed and dragged in again, always facing 0°
+test('a placed robot is re-placed and turned under its own id, keeping what the other act left', () => {
+  const scene = { site: 'local', names: {}, devices: [{ id: 'so101-1', product: 'physical-sandbox/so101:1', pose: { xyz: [0.08, 0.06, 0], rpy: [0, 0, Math.PI / 3] } }] };
+  const [row] = placedRows(scene);
+  assert.deepEqual(row.xy, [0.08, 0.06]);
+  assert.equal(row.yawDeg, 60);
+  // Re-placed: where the floor was clicked, facing as it did
+  assert.deepEqual(moveRequest(row, { xy: [0.2, 0.1] }), { id: 'so101-1', product: 'physical-sandbox/so101:1', xyz: [0.2, 0.1, 0], yaw: Math.PI / 3 });
+  // Turned: where it stands, facing the degrees typed
+  assert.deepEqual(moveRequest(row, { yawDeg: -90 }), { id: 'so101-1', product: 'physical-sandbox/so101:1', xyz: [0.08, 0.06, 0], yaw: -Math.PI / 2 });
+  // ← turns it left (counter-clockwise seen from above), → right, 15° a press, kept within -180..180
+  assert.equal(turnedBy(60, 'ArrowLeft'), 75);
+  assert.equal(turnedBy(60, 'ArrowRight'), 45);
+  assert.equal(turnedBy(175, 'ArrowLeft'), -170);
+  assert.equal(turnedBy(60, 'Enter'), null);
 });

@@ -33,6 +33,10 @@ export const WORDS = {
   placed: { ja: '置いたロボット', en: 'Placed' },
   placedNone: { ja: 'まだ何も置いていません', en: 'Nothing placed yet' },
   remove: { ja: '取り除く', en: 'Remove' },
+  replace: { ja: '移動', en: 'Move' },
+  facing: { ja: '向き（°）', en: 'Facing (°)' },
+  replaceHint: { ja: '{name} の移動先を、床の上でクリックしてください（← → で向きを変えます。Esc でやめる）', en: 'Click the floor where {name} goes (← → turn it, Esc to cancel)' },
+  replaced: { ja: '{name} を移動しました', en: '{name} was moved' },
   notDrawn: { ja: '{product} を読み込めませんでした', en: '{product} could not be loaded' },
   // where a robot of the list comes from (src/core/machines.ts MachineSource)
   sourceCatalog: { ja: 'PS.com のカタログ', en: 'PS.com catalog' },
